@@ -1,0 +1,10 @@
+{
+  "name": "matterbridge-host-health",
+  "type": "DynamicPlatform",
+  "whiteList": [],
+  "blackList": [],
+  "pollInterval": 30,
+  "sysfsPath": "/sys",
+  "debug": false,
+  "unregisterOnShutdown": false
+}
