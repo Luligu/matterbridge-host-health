@@ -29,7 +29,14 @@ If you like this project and find it useful, please consider giving it a star on
 
 <a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="120"></a>
 
+---
+
 ## [1.0.1] - Dev branch
+
+### Changed
+
+- [tooling]: Refresh shared templates and repository documentation with mb-run.
+- [scripts]: Update downloads.mjs to v.2.2.0 to handle missing npm download data for new packages.
 
 <a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
 
