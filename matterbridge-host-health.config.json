@@ -3,6 +3,7 @@
   "type": "DynamicPlatform",
   "whiteList": [],
   "blackList": [],
+  "nodeLabels": {},
   "pollInterval": 30,
   "sysfsPath": "/sys",
   "debug": false,

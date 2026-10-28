@@ -33,6 +33,12 @@ If you like this project and find it useful, please consider giving it a star on
 
 ## [1.0.1] - Dev branch
 
+### Added
+
+- [config]: Apply node label updates immediately through onConfigChanged.
+- [config]: Add the nodeLabels object with a per-device name setting to the schema, default config and configuration type.
+- [config]: Apply valid 1–32 character node labels for each newly registered device and all devices during onConfigure, log changes at INFO level and warn and skip invalid names or missing devices.
+
 ### Changed
 
 - [tooling]: Refresh shared templates and repository documentation with mb-run.

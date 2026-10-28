@@ -39,14 +39,17 @@ Add `matterbridge-host-health` in the Matterbridge frontend once the package is 
 
 ## Configuration
 
-| Setting                | Default | Description                                                                  |
-| ---------------------- | ------- | ---------------------------------------------------------------------------- |
-| `pollInterval`         | `30`    | Reading interval in seconds, from 5 to 3600. Invalid values fall back to 30. |
-| `sysfsPath`            | `/sys`  | Linux sysfs root, including a Docker bind mount if used.                     |
-| `whiteList`            | `[]`    | Expose only selected device names or serial numbers. Empty exposes all.      |
-| `blackList`            | `[]`    | Exclude selected devices.                                                    |
-| `debug`                | `false` | Enable debug logging.                                                        |
-| `unregisterOnShutdown` | `false` | Unregister devices on shutdown for debugging.                                |
+| Setting                | Default | Description                                                                   |
+| ---------------------- | ------- | ----------------------------------------------------------------------------- |
+| `pollInterval`         | `30`    | Reading interval in seconds, from 5 to 3600. Invalid values fall back to 30.  |
+| `sysfsPath`            | `/sys`  | Linux sysfs root, including a Docker bind mount if used.                      |
+| `whiteList`            | `[]`    | Expose only selected device names or serial numbers. Empty exposes all.       |
+| `blackList`            | `[]`    | Exclude selected devices.                                                     |
+| `nodeLabels`           | `{}`    | Per-device objects with a `name` string for the name shown by the controller. |
+| `debug`                | `false` | Enable debug logging.                                                         |
+| `unregisterOnShutdown` | `false` | Unregister devices on shutdown for debugging.                                 |
+
+The `nodeLabels` name changes the name the controller sees, like renaming the device in the controller UI. After registration, only the newly registered device is updated. During configuration and whenever the plugin configuration is saved, all entries are processed. Node label changes apply immediately without a restart. Each key is matched to a device name and its `name` is applied to the device's `nodeLabel` attribute and logged at INFO level. A missing device logs a warning and skips that entry. Each `name` must be a string of 1–32 characters; an invalid name logs a warning and skips that entry.
 
 Devices are created only during startup. Discovery runs only at startup. Polling and configuration read the saved sensor sources and update existing devices; restart the plugin to discover new sensors. Keep the hostname and mount path stable to preserve sensor identities across restarts. Restart the plugin after changing device selection.
 
