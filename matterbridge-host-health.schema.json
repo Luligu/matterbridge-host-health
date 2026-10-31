@@ -37,6 +37,24 @@
       "uniqueItems": true,
       "selectFrom": "name"
     },
+    "nodeLabels": {
+      "title": "Node Labels",
+      "description": "Configure the device name shown by the controller, like renaming the device in the controller UI. Select the device and enter its name.",
+      "type": "object",
+      "selectFrom": "name",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "description": "Device name shown by the controller, like the name set in the controller UI.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          }
+        }
+      }
+    },
     "pollInterval": {
       "title": "Poll interval",
       "description": "Seconds between temperature readings.",

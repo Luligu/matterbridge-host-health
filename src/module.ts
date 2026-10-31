@@ -25,7 +25,9 @@ import { hostname, platform } from 'node:os';
 
 import { type BasePlatformConfig, MatterbridgeDynamicPlatform, MatterbridgeEndpoint, type PlatformMatterbridge, temperatureSensor } from 'matterbridge';
 import type { AnsiLogger } from 'matterbridge/logger';
-import { TemperatureMeasurement } from 'matterbridge/matter/clusters';
+import { BridgedDeviceBasicInformation, TemperatureMeasurement } from 'matterbridge/matter/clusters';
+import { isValidInteger, isValidString } from 'matterbridge/utils';
+import { bgBlue, info } from 'node-ansi-logger';
 
 import { type CpuTemperature, readLinuxTemperatures, sampleCpuTemperatures, sensorSerial } from './temperatures.js';
 
@@ -33,6 +35,7 @@ import { type CpuTemperature, readLinuxTemperatures, sampleCpuTemperatures, sens
 export type HostHealthPlatformConfig = BasePlatformConfig & {
   whiteList: string[];
   blackList: string[];
+  nodeLabels: Record<string, { name?: string }>;
   pollInterval: number;
   sysfsPath: string;
 };
@@ -71,11 +74,11 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
   ) {
     super(matterbridge, log, config);
     if (!this.verifyMatterbridgeVersion('3.11.0')) throw new Error('This plugin requires Matterbridge >= 3.11.0.');
-    this.log.info(`Initializing platform ${this.config.name}...`);
-    const seconds = this.config.pollInterval ?? 30;
-    this.config.pollInterval = Number.isInteger(seconds) && seconds >= 5 && seconds <= 3600 ? seconds : 30;
-    this.config.sysfsPath = typeof this.config.sysfsPath === 'string' && this.config.sysfsPath.trim() ? this.config.sysfsPath : '/sys';
-    this.log.info(`Platform ${this.config.name} initialized successfully`);
+    this.log.info(info`Initializing platform ${bgBlue.white`${this.config.name}`}...`);
+    this.config.nodeLabels ??= {};
+    this.config.pollInterval = isValidInteger(this.config.pollInterval, 5, 3600) ? this.config.pollInterval : 30;
+    this.config.sysfsPath = isValidString(this.config.sysfsPath, 1) && this.config.sysfsPath.trim() ? this.config.sysfsPath : '/sys';
+    this.log.info(info`Platform ${bgBlue.white`${this.config.name}`} initialized successfully`);
   }
 
   /**
@@ -84,7 +87,7 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
    * @returns {Promise<void>} Resolves when initial discovery finishes.
    */
   override async onStart(reason?: string): Promise<void> {
-    this.log.info(`Starting platform ${this.config.name} with reason: ${reason ?? 'no reason provided'}...`);
+    this.log.info(info`Starting platform ${bgBlue.white`${this.config.name}`} with reason: ${reason ?? 'no reason provided'}...`);
     await this.ready;
     await this.clearSelect();
     if (this.hostPlatform !== 'linux') {
@@ -101,7 +104,7 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
       this.pending = undefined;
     }
     this.schedule();
-    this.log.info(`Platform ${this.config.name} started successfully`);
+    this.log.info(info`Platform ${bgBlue.white`${this.config.name}`} started successfully`);
   }
 
   /**
@@ -110,9 +113,22 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
    */
   override async onConfigure(): Promise<void> {
     await super.onConfigure();
-    this.log.info(`Configuring platform ${this.config.name}...`);
+    this.log.info(info`Configuring platform ${bgBlue.white`${this.config.name}`}...`);
     if (!this.stopped) await this.refresh();
-    this.log.info(`Platform ${this.config.name} configured successfully`);
+    await this.configureNodeLabels();
+    this.log.info(info`Platform ${bgBlue.white`${this.config.name}`} configured successfully`);
+  }
+
+  /**
+   * Apply node labels after the plugin configuration changes.
+   * @param {HostHealthPlatformConfig} _config Updated configuration already assigned by Matterbridge.
+   * @returns {Promise<void>} Resolves after configured node labels are processed.
+   */
+  override async onConfigChanged(_config: HostHealthPlatformConfig): Promise<void> {
+    this.log.info(info`Changing configuration for platform ${bgBlue.white`${this.config.name}`}...`);
+    this.config.nodeLabels ??= {};
+    await this.configureNodeLabels();
+    this.log.info(info`Platform ${bgBlue.white`${this.config.name}`} configuration changed successfully`);
   }
 
   /**
@@ -125,11 +141,11 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
     clearTimeout(this.timer);
     await this.pending;
     await super.onShutdown(reason);
-    this.log.info(`Shutting down platform ${this.config.name} with reason: ${reason ?? 'no reason provided'}...`);
+    this.log.info(info`Shutting down platform ${bgBlue.white`${this.config.name}`} with reason: ${reason ?? 'no reason provided'}...`);
     if (this.config.unregisterOnShutdown) await this.unregisterAllDevices();
     this.sensors.clear();
     this.sources.length = 0;
-    this.log.info(`Platform ${this.config.name} shut down successfully`);
+    this.log.info(info`Platform ${bgBlue.white`${this.config.name}`} shut down successfully`);
   }
 
   /**
@@ -171,11 +187,34 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
           .createDefaultTemperatureMeasurementClusterServer(reading.celsius === null ? null : Math.round(reading.celsius * 100))
           .addRequiredClusters();
         await this.registerDevice(device);
+        await this.configureNodeLabels(device);
         this.sensors.set(serial, device);
         this.sources.push(reading);
       }
     } catch (error) {
       this.warnReadingError(error);
+    }
+  }
+
+  /**
+   * Apply configured node labels and log changes or invalid entries.
+   * @param {MatterbridgeEndpoint} [device] Device to update; when omitted, process all configured devices.
+   * @returns {Promise<void>} Resolves after processing all configured labels.
+   */
+  private async configureNodeLabels(device?: MatterbridgeEndpoint): Promise<void> {
+    for (const [key, { name }] of Object.entries(this.config.nodeLabels)) {
+      if (device && device.deviceName !== key) continue;
+      if (!isValidString(name, 1, 32)) {
+        this.log.warn(`Invalid node label for "${key}": name must be a string between 1 and 32 characters`);
+        continue;
+      }
+      const target = device ?? this.getDeviceByName(key);
+      if (!target) {
+        this.log.warn(`Device "${key}" not found while configuring node label`);
+        continue;
+      }
+      await target.setAttribute(BridgedDeviceBasicInformation, 'nodeLabel', name, this.log);
+      this.log.info(`Set node label for "${key}" to "${name}"`);
     }
   }
 

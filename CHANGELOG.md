@@ -29,6 +29,25 @@ If you like this project and find it useful, please consider giving it a star on
 
 <a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="120"></a>
 
+---
+
+## [1.0.1] - 2026-10-31
+
+### Added
+
+- [config]: Apply node label updates immediately through onConfigChanged.
+- [config]: Add the nodeLabels object with a per-device name setting to the schema, default config and configuration type.
+- [config]: Apply valid 1–32 character node labels for each newly registered device and all devices during onConfigure, log changes at INFO level and warn and skip invalid names or missing devices.
+
+### Changed
+
+- [package]: Bump `@types/node` to v.26.6.6 and refresh transitive dependencies.
+- [agents]: Update `AGENTS.md` to v.1.0.8.
+- [tooling]: Refresh shared templates and repository documentation with mb-run.
+- [scripts]: Update downloads.mjs to v.2.2.0 to handle missing npm download data for new packages.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
 ## [1.0.0] - 2026-10-27
 
 Initial release.

@@ -5,7 +5,7 @@
  */
 
 import type { PlatformMatterbridge } from 'matterbridge';
-import { TemperatureMeasurement } from 'matterbridge/matter/clusters';
+import { BridgedDeviceBasicInformation, TemperatureMeasurement } from 'matterbridge/matter/clusters';
 import {
   addMatterbridge,
   createServerNode,
@@ -20,6 +20,7 @@ import {
   loggerWarnSpy,
   setupTest,
 } from 'matterbridge/test-utils/vitest';
+import { bgBlue, info } from 'node-ansi-logger';
 
 import initializePlugin, { HostHealthPlatform, type HostHealthPlatformConfig } from '../src/module.js';
 
@@ -43,6 +44,7 @@ const config: HostHealthPlatformConfig = {
   version: '1.0.0',
   whiteList: [],
   blackList: [],
+  nodeLabels: {},
   pollInterval: 5,
   sysfsPath: '/sys',
   debug: false,
@@ -94,6 +96,82 @@ afterAll(async () => {
 });
 
 describe('host health lifecycle', () => {
+  it('should apply updated node labels when configuration changes', async () => {
+    await instance.onStart();
+    const [device] = instance.getDevices();
+    const updatedConfig = { ...instance.config, nodeLabels: { [`${state.hostname} Core 0`]: { name: 'Updated CPU' } } };
+    instance.config = updatedConfig;
+    await instance.onConfigChanged(updatedConfig);
+    expect(instance.config).toBe(updatedConfig);
+    expect(device.getAttribute(BridgedDeviceBasicInformation, 'nodeLabel')).toBe('Updated CPU');
+    expect(loggerInfoSpy).toHaveBeenCalledWith(`Set node label for "${state.hostname} Core 0" to "Updated CPU"`);
+    const withoutLabels = { ...updatedConfig };
+    Reflect.deleteProperty(withoutLabels, 'nodeLabels');
+    instance.config = withoutLabels;
+    await instance.onConfigChanged(withoutLabels);
+    expect(instance.config.nodeLabels).toEqual({});
+    expect(device.getAttribute(BridgedDeviceBasicInformation, 'nodeLabel')).toBe('Updated CPU');
+  });
+
+  it('should apply configured node labels to matching devices and log the changes', async () => {
+    await instance.onStart();
+    const [first, second] = instance.getDevices();
+    const key = `${state.hostname} Core 0`;
+    instance.config.nodeLabels = {
+      [key]: { name: 'Living room CPU' },
+      'Missing device': { name: 'Missing CPU' },
+      [`${state.hostname} Core 1`]: { name: 'Second CPU' },
+    };
+    expectedWarnings = ['Device "Missing device" not found while configuring node label'];
+    await instance.onConfigure();
+    expect(first.getAttribute(BridgedDeviceBasicInformation, 'nodeLabel')).toBe('Living room CPU');
+    expect(second.getAttribute(BridgedDeviceBasicInformation, 'nodeLabel')).toBe('Second CPU');
+    expect(loggerInfoSpy).toHaveBeenCalledWith(`Set node label for "${key}" to "Living room CPU"`);
+    expect(loggerInfoSpy).not.toHaveBeenCalledWith('Set node label for "Missing device" to "Missing CPU"');
+    expect(loggerWarnSpy).toHaveBeenCalledWith(expectedWarnings[0]);
+    expect(loggerInfoSpy).toHaveBeenCalledWith(info`Platform ${bgBlue.white`${config.name}`} configured successfully`);
+  });
+
+  it.each([undefined, null, 42, '', 'a'.repeat(33)])('should warn and continue applying later labels when the name is invalid: %s', async (name) => {
+    await instance.onStart();
+    const devices = instance.getDevices();
+    const labels = devices.map((device) => device.getAttribute(BridgedDeviceBasicInformation, 'nodeLabel'));
+    const key = `${state.hostname} Core 0`;
+    const entry = {};
+    if (name !== undefined) Reflect.set(entry, 'name', name);
+    instance.config.nodeLabels = { [key]: entry, [`${state.hostname} Core 1`]: { name: 'Valid label' } };
+    expectedWarnings = [`Invalid node label for "${key}": name must be a string between 1 and 32 characters`];
+    await instance.onConfigure();
+    expect(devices[0].getAttribute(BridgedDeviceBasicInformation, 'nodeLabel')).toBe(labels[0]);
+    expect(devices[1].getAttribute(BridgedDeviceBasicInformation, 'nodeLabel')).toBe('Valid label');
+    expect(loggerWarnSpy).toHaveBeenCalledWith(expectedWarnings[0]);
+    expect(loggerInfoSpy).toHaveBeenCalledWith(info`Platform ${bgBlue.white`${config.name}`} configured successfully`);
+  });
+
+  it.each(['a', 'a'.repeat(32)])('should accept a node label at the length boundary: %s', async (name) => {
+    await instance.onStart();
+    instance.config.nodeLabels = { [`${state.hostname} Core 0`]: { name } };
+    await instance.onConfigure();
+    expect(instance.getDevices()[0].getAttribute(BridgedDeviceBasicInformation, 'nodeLabel')).toBe(name);
+  });
+
+  it('should apply configured node labels immediately after device registration', async () => {
+    const key = `${state.hostname} Core 0`;
+    const secondKey = `${state.hostname} Core 1`;
+    instance.config.nodeLabels = {
+      [key]: { name: 'Startup CPU' },
+      [secondKey]: { name: 'Second CPU' },
+      'Missing device': {},
+    };
+    await instance.onStart();
+    expect(instance.getDevices()[0].getAttribute(BridgedDeviceBasicInformation, 'nodeLabel')).toBe('Startup CPU');
+    expect(instance.getDevices()[1].getAttribute(BridgedDeviceBasicInformation, 'nodeLabel')).toBe('Second CPU');
+    expect(loggerInfoSpy).toHaveBeenCalledWith(`Set node label for "${key}" to "Startup CPU"`);
+    expect(loggerInfoSpy.mock.calls.filter(([message]) => message === `Set node label for "${key}" to "Startup CPU"`)).toHaveLength(1);
+    expect(loggerInfoSpy).toHaveBeenCalledWith(`Set node label for "${secondKey}" to "Second CPU"`);
+    expect(loggerWarnSpy).not.toHaveBeenCalled();
+  });
+
   it('should initialize the platform and reject unsupported Matterbridge versions', () => {
     expect(instance).toBeInstanceOf(HostHealthPlatform);
     expect(() => initializePlugin({ ...matterbridge, matterbridgeVersion: '3.0.0' }, log, { ...config })).toThrow('This plugin requires Matterbridge >= 3.11.0.');
@@ -238,7 +316,7 @@ describe('configuration and sampling edge cases', () => {
     const starting = instance.onStart();
     await vi.waitFor(() => expect(state.read).toHaveBeenCalledOnce(), { interval: 1 });
     const configuring = instance.onConfigure();
-    await vi.waitFor(() => expect(loggerInfoSpy).toHaveBeenCalledWith(`Configuring platform ${config.name}...`), { interval: 1 });
+    await vi.waitFor(() => expect(loggerInfoSpy).toHaveBeenCalledWith(info`Configuring platform ${bgBlue.white`${config.name}`}...`), { interval: 1 });
     const stopping = instance.onShutdown();
     complete([]);
     await Promise.all([starting, configuring, stopping]);
