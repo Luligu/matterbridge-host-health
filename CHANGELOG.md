@@ -41,6 +41,8 @@ If you like this project and find it useful, please consider giving it a star on
 
 ### Changed
 
+- [package]: Bump `@types/node` to v.26.6.6 and refresh transitive dependencies.
+- [agents]: Update `AGENTS.md` to v.1.0.8.
 - [tooling]: Refresh shared templates and repository documentation with mb-run.
 - [scripts]: Update downloads.mjs to v.2.2.0 to handle missing npm download data for new packages.
 
