@@ -1,6 +1,6 @@
 {
   "name": "matterbridge-host-health",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Matterbridge host CPU temperature sensors for Linux",
   "author": "https://github.com/Luligu",
   "license": "Apache-2.0",
