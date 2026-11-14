@@ -164,6 +164,38 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
   }
 
   /**
+   * Serve the frontend REST API.
+   * - `GET devices` returns the registered devices with their serial, name and latest temperature.
+   * - `GET device?serial=<serial>` returns a single registered device.
+   * - `GET device-history?serial=<serial>` returns the temperature history of a registered device.
+   * @param {string} method HTTP method.
+   * @param {string} [path] API path below the plugin api namespace.
+   * @param {Record<string, unknown>} [query] Query string parameters.
+   * @returns {Promise<unknown>} JSON-serializable response, or undefined for 404.
+   */
+  // oxlint-disable-next-line typescript/require-await
+  override async onFetch(method: string, path?: string, query?: Record<string, unknown>): Promise<unknown> {
+    if (method !== 'GET') return undefined;
+    const info = (device: MatterbridgeEndpoint): { serial: string; name: string; celsius: number | null; timestamp: number | null } => {
+      // Registered devices always have a serial number and a name from the basic information cluster.
+      const serial = String(device.serialNumber);
+      const last = this.history.get(serial)?.get().at(-1);
+      return { serial, name: String(device.deviceName), celsius: last?.celsius ?? null, timestamp: last?.timestamp ?? null };
+    };
+    if (path === 'devices') return this.getDevices().map(info);
+    if (path === 'device') {
+      const device = typeof query?.serial === 'string' ? this.getDeviceBySerialNumber(query.serial) : undefined;
+      return device ? info(device) : undefined;
+    }
+    if (path === 'device-history') {
+      const serial = query?.serial;
+      if (typeof serial !== 'string' || !this.getDeviceBySerialNumber(serial)) return undefined;
+      return this.history.get(serial)?.get() ?? [];
+    }
+    return undefined;
+  }
+
+  /**
    * Stop polling and await any active read before shutdown.
    * @param {string} [reason] Shutdown reason.
    * @returns {Promise<void>} Resolves when cleanup finishes.
@@ -227,6 +259,7 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
           .createDefaultBridgedDeviceBasicInformationClusterServer(name.slice(0, 32), serial, this.matterbridge.aggregatorVendorId, 'Matterbridge', 'Host CPU Temperature')
           .createDefaultTemperatureMeasurementClusterServer(reading.celsius === null ? null : Math.round(reading.celsius * 100))
           .addRequiredClusters();
+        device.configUrl = `./plugins/matterbridge-host-health/?device=${encodeURIComponent(serial)}`;
         device
           .addChildDeviceType('TemperatureAlert', contactSensor)
           .createDefaultBooleanStateClusterServer(reading.celsius === null || reading.celsius <= this.config.temperatureAlert)

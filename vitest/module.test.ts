@@ -517,6 +517,32 @@ describe('device history', () => {
     expect(set).toHaveBeenCalled();
   });
 
+  it('should serve the devices and device-history api', async () => {
+    await instance.onStart();
+    const serials = instance.getDevices().map((device) => String(device.serialNumber));
+    expect(await instance.onFetch('GET', 'devices')).toEqual([
+      { serial: serials[0], name: `${state.hostname} Core 0`, celsius: 42.25, timestamp: expect.any(Number) },
+      { serial: serials[1], name: `${state.hostname} Core 1`, celsius: 45, timestamp: expect.any(Number) },
+    ]);
+    expect(instance.getDevices()[0].configUrl).toBe(`./plugins/matterbridge-host-health/?device=${serials[0]}`);
+    expect(await instance.onFetch('GET', 'device', { serial: serials[0] })).toEqual({
+      serial: serials[0],
+      name: `${state.hostname} Core 0`,
+      celsius: 42.25,
+      timestamp: expect.any(Number),
+    });
+    expect(await instance.onFetch('GET', 'device', { serial: 'unknown' })).toBeUndefined();
+    expect(await instance.onFetch('GET', 'device')).toBeUndefined();
+    expect(await instance.onFetch('GET', 'device-history', { serial: serials[0] })).toEqual([{ timestamp: expect.any(Number), celsius: 42.25 }]);
+    instance.history.delete(serials[1]);
+    expect(await instance.onFetch('GET', 'devices')).toEqual(expect.arrayContaining([{ serial: serials[1], name: `${state.hostname} Core 1`, celsius: null, timestamp: null }]));
+    expect(await instance.onFetch('GET', 'device-history', { serial: serials[1] })).toEqual([]);
+    expect(await instance.onFetch('GET', 'device-history', { serial: 'unknown' })).toBeUndefined();
+    expect(await instance.onFetch('GET', 'device-history')).toBeUndefined();
+    expect(await instance.onFetch('GET', 'other')).toBeUndefined();
+    expect(await instance.onFetch('POST', 'devices')).toBeUndefined();
+  });
+
   it('should skip history persistence when the platform context is unavailable', async () => {
     await instance.ready;
     instance.context = undefined;

@@ -1,7 +1,7 @@
 {
-  "name": "matterbridge-template-frontend",
+  "name": "matterbridge-host-health-frontend",
   "version": "1.0.0",
-  "description": "Frontend for the matterbridge-template plugin",
+  "description": "Frontend for the matterbridge-host-health plugin",
   "author": "https://github.com/Luligu",
   "license": "Apache-2.0",
   "private": true,

@@ -35,6 +35,9 @@ If you like this project and find it useful, please consider giving it a star on
 
 ### Added
 
+- [frontend]: Add a temperature history graph for each registered device, refreshed every minute.
+- [api]: Add the `devices`, `device?serial=<serial>` and `device-history?serial=<serial>` plugin API endpoints served by `onFetch`.
+- [device]: Set each device `configUrl` to open the frontend graph of that single device.
 - [history]: Add a circular temperature history per device serial number, loaded from the platform context on start and saved every 60 minutes and on shutdown.
 - [platform]: Implement `onChangeLoggerLevel` to update the platform and registered device logger levels.
 - [config]: Add `temperatureAlert` threshold setting (default `70` °C) and expose a child `contactSensor` (`BooleanState`) endpoint on each device that opens when the temperature exceeds `temperatureAlert`.

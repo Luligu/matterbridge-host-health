@@ -31,10 +31,19 @@ A Linux and macOS (Apple Silicon) Matterbridge plugin that exposes host CPU temp
 - macOS (Apple Silicon) discovery through IOKit HID thermal sensors (`PMU tdie*`, `SOC MTR*`, `pACC MTR*`, `eACC MTR*`) via `koffi`, without `sudo`.
 - Periodic updates, stable device identities and the standard Matterbridge device selection lists.
 - A circular temperature history per device (last 2880 samples, 48 hours at the default 60 s poll), persisted in the platform context, loaded on start and saved every 60 minutes and on shutdown.
+- A plugin frontend with a temperature graph for each registered device, backed by the plugin API endpoints `api/devices`, `api/device?serial=<serial>` and `api/device-history?serial=<serial>`. Each device `configUrl` opens the graph of that single device.
 - Missing, unreadable or invalid temperatures are reported as unavailable, never as zero.
 - Unsupported operating systems show a warning snackbar and create no devices.
 
 Requires Matterbridge 3.11.0 or later.
+
+## Frontend
+
+The plugin frontend shows the current temperature and a 48-hour history graph for each registered device, refreshed every minute. Open it from the plugin page in Matterbridge, or from a device's configuration link to see only that device.
+
+<p align="center">
+  <img src="./screenshots/image.png" alt="Matterbridge Host Health frontend showing a temperature history graph for each device" width="800">
+</p>
 
 ## Installation
 
