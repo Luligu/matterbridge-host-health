@@ -73,7 +73,7 @@
     },
     "sysfsPath": {
       "title": "Linux sysfs path",
-      "description": "Root of the Linux host sysfs mount.",
+      "description": "Root of the Linux host sysfs filesystem (default /sys). In Docker on a Linux host, bind-mount the whole host /sys read-only (for example, -v /sys:/host-sys:ro) and set this to /host-sys so class/hwmon and class/thermal symlinks resolve into devices. Ignored on macOS.",
       "type": "string",
       "default": "/sys"
     },
