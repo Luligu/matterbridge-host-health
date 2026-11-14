@@ -180,7 +180,8 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
       // Registered devices always have a serial number and a name from the basic information cluster.
       const serial = String(device.serialNumber);
       const last = this.history.get(serial)?.get().at(-1);
-      return { serial, name: String(device.deviceName), celsius: last?.celsius ?? null, timestamp: last?.timestamp ?? null };
+      const label = this.config.nodeLabels[String(device.deviceName)]?.name;
+      return { serial, name: isValidString(label, 1, 32) ? label : String(device.deviceName), celsius: last?.celsius ?? null, timestamp: last?.timestamp ?? null };
     };
     if (path === 'devices') return this.getDevices().map(info);
     if (path === 'device') {

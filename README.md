@@ -42,7 +42,7 @@ Requires Matterbridge 3.11.0 or later.
 The plugin frontend shows the current temperature and a 48-hour history graph for each registered device, refreshed every minute. Open it from the plugin page in Matterbridge, or from a device's configuration link to see only that device.
 
 <p align="center">
-  <img src="./screenshots/image.png" alt="Matterbridge Host Health frontend showing a temperature history graph for each device" width="800">
+  <img src="./screenshots/frontend.png" alt="Matterbridge Host Health frontend showing a temperature history graph for each device" width="800">
 </p>
 
 ## Installation

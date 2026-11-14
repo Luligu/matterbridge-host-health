@@ -541,6 +541,9 @@ describe('device history', () => {
     expect(await instance.onFetch('GET', 'device-history')).toBeUndefined();
     expect(await instance.onFetch('GET', 'other')).toBeUndefined();
     expect(await instance.onFetch('POST', 'devices')).toBeUndefined();
+    instance.config.nodeLabels = { [`${state.hostname} Core 0`]: { name: 'CPU Package' }, [`${state.hostname} Core 1`]: { name: '' } };
+    expect(await instance.onFetch('GET', 'device', { serial: serials[0] })).toEqual(expect.objectContaining({ name: 'CPU Package' }));
+    expect(await instance.onFetch('GET', 'device', { serial: serials[1] })).toEqual(expect.objectContaining({ name: `${state.hostname} Core 1` }));
   });
 
   it('should skip history persistence when the platform context is unavailable', async () => {
