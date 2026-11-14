@@ -60,6 +60,7 @@
   "files": [
     "bin",
     "dist",
+    "apps/frontend/build",
     "npm-shrinkwrap.json",
     "CHANGELOG.md",
     "*.config.json",
