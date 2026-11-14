@@ -29,6 +29,7 @@ import { BooleanState, BridgedDeviceBasicInformation, TemperatureMeasurement } f
 import { isValidInteger, isValidNumber, isValidString } from 'matterbridge/utils';
 import { bgBlue, info } from 'node-ansi-logger';
 
+import { readMacosTemperatures } from './macos.js';
 import { type CpuTemperature, readLinuxTemperatures, sampleCpuTemperatures, sensorSerial } from './temperatures.js';
 
 /** Configuration for host CPU temperature discovery. */
@@ -97,8 +98,8 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
     this.log.info(info`Starting platform ${bgBlue.white`${this.config.name}`} with reason: ${reason ?? 'no reason provided'}...`);
     await this.ready;
     await this.clearSelect();
-    if (this.hostPlatform !== 'linux') {
-      const message = `Host Health supports Linux only. No devices will be created on ${this.hostPlatform}.`;
+    if (this.hostPlatform !== 'linux' && this.hostPlatform !== 'darwin') {
+      const message = `Host Health supports Linux and macOS only. No devices will be created on ${this.hostPlatform}.`;
       this.log.warn(message);
       this.wssSendSnackbarMessage(message, 0, 'warning');
       return;
@@ -193,10 +194,14 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
    */
   private async createDevices(): Promise<void> {
     try {
-      const readings = await readLinuxTemperatures(this.config.sysfsPath);
+      const readings = this.hostPlatform === 'darwin' ? await readMacosTemperatures() : await readLinuxTemperatures(this.config.sysfsPath);
       if (this.stopped) return;
       if (!readings.length) {
-        this.log.warn('No CPU temperatures found. Check Linux sensor availability and sysfs permissions.');
+        this.log.warn(
+          this.hostPlatform === 'darwin'
+            ? 'No CPU temperatures found. Check macOS Apple Silicon IOKit sensor availability.'
+            : 'No CPU temperatures found. Check Linux sensor availability and sysfs permissions.',
+        );
       }
       for (const reading of readings) {
         const serial = sensorSerial(`${hostname()}/${reading.id}`);

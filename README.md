@@ -21,13 +21,14 @@
 
 ---
 
-A Linux-only Matterbridge plugin that exposes host CPU temperatures as Matter temperature sensor devices.
+A Linux and macOS (Apple Silicon) Matterbridge plugin that exposes host CPU temperatures as Matter temperature sensor devices.
 
 ## Features
 
 - One temperature sensor per detected CPU channel (package, core, die or CCD).
 - A child contact sensor (`BooleanState`) per device that opens when the temperature exceeds `temperatureAlert` (default `70` °C).
 - Linux discovery through CPU `hwmon` drivers and CPU-labelled channels, with CPU thermal zones as a fallback when no hwmon CPU channels exist.
+- macOS (Apple Silicon) discovery through IOKit HID thermal sensors (`PMU tdie*`, `SOC MTR*`, `pACC MTR*`, `eACC MTR*`) via `koffi`, without `sudo`.
 - Periodic updates, stable device identities and the standard Matterbridge device selection lists.
 - Missing, unreadable or invalid temperatures are reported as unavailable, never as zero.
 - Unsupported operating systems show a warning snackbar and create no devices.

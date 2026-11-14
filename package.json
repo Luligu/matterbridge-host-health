@@ -123,5 +123,8 @@
     "oxlint-tsgolint": "7.0.2007",
     "typescript": "7.0.2",
     "vitest": "5.1.0"
+  },
+  "optionalDependencies": {
+    "koffi": "3.3.8"
   }
 }

@@ -37,6 +37,8 @@ If you like this project and find it useful, please consider giving it a star on
 
 - [platform]: Implement `onChangeLoggerLevel` to update the platform and registered device logger levels.
 - [config]: Add `temperatureAlert` threshold setting (default `70` °C) and expose a child `contactSensor` (`BooleanState`) endpoint on each device that opens when the temperature exceeds `temperatureAlert`.
+- [macos]: Add macOS (Apple Silicon) CPU/SoC temperature discovery and sampling via IOKit HID thermal sensors using optional [koffi](https://koffi.dev) FFI without `sudo`.
+- [package]: Add optional [koffi](https://koffi.dev) v.3.3.8 dependency.
 
 ### Changed
 

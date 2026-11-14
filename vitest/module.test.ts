@@ -25,11 +25,15 @@ import { bgBlue, info } from 'node-ansi-logger';
 
 import initializePlugin, { HostHealthPlatform, type HostHealthPlatformConfig } from '../src/module.js';
 
-const state = vi.hoisted(() => ({ platform: 'linux', hostname: 'host', read: vi.fn(), sample: vi.fn() }));
+const state = vi.hoisted(() => ({ platform: 'linux', hostname: 'host', read: vi.fn(), readMacos: vi.fn(), sample: vi.fn() }));
 vi.mock('node:os', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:os')>()),
   platform: (): string => state.platform,
   hostname: (): string => state.hostname,
+}));
+vi.mock('../src/macos.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/macos.js')>()),
+  readMacosTemperatures: state.readMacos,
 }));
 vi.mock('../src/temperatures.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/temperatures.js')>()),
@@ -75,6 +79,7 @@ beforeEach(() => {
     { id: 'cpu0', name: 'Core 0', celsius: 42.25 },
     { id: 'cpu1', name: 'Core 1', celsius: 45 },
   ]);
+  state.readMacos.mockResolvedValue([{ id: 'darwin/PMU tdie1', name: 'PMU tdie1', celsius: 36.5 }]);
   instance = initializePlugin(matterbridge, log, { ...config, whiteList: [], blackList: [] });
   addMatterbridge(instance);
 });
@@ -215,17 +220,35 @@ describe('host health lifecycle', () => {
     expect(loggerWarnSpy).not.toHaveBeenCalled();
   });
 
-  it.each(['win32', 'darwin'])('should show a snackbar and create no devices on unsupported platform %s', async (hostPlatform) => {
+  it('should discover macOS sensors and warn when none are found', async () => {
+    await instance.onShutdown();
+    state.platform = 'darwin';
+    instance = initializePlugin(matterbridge, log, { ...config });
+    addMatterbridge(instance);
+    await instance.onStart();
+    expect(state.readMacos).toHaveBeenCalledOnce();
+    expect(state.read).not.toHaveBeenCalled();
+    expect(instance.getDevices()).toHaveLength(1);
+    await instance.onShutdown();
+    state.readMacos.mockResolvedValueOnce([]);
+    expectedWarnings = ['No CPU temperatures found. Check macOS Apple Silicon IOKit sensor availability.'];
+    instance = initializePlugin(matterbridge, log, { ...config });
+    addMatterbridge(instance);
+    await instance.onStart();
+    expect(instance.getDevices()).toHaveLength(0);
+  });
+
+  it.each(['win32', 'freebsd'])('should show a snackbar and create no devices on unsupported platform %s', async (hostPlatform) => {
     await instance.onShutdown();
     state.platform = hostPlatform;
-    expectedWarnings = [`Host Health supports Linux only. No devices will be created on ${hostPlatform}.`];
+    expectedWarnings = [`Host Health supports Linux and macOS only. No devices will be created on ${hostPlatform}.`];
     instance = initializePlugin(matterbridge, log, { ...config });
     addMatterbridge(instance);
     const snackbar = vi.spyOn(instance, 'wssSendSnackbarMessage');
     await instance.onStart('test');
     expect(state.read).not.toHaveBeenCalled();
     expect(instance.getDevices()).toHaveLength(0);
-    expect(snackbar).toHaveBeenCalledWith(expect.stringContaining('Linux only'), 0, 'warning');
+    expect(snackbar).toHaveBeenCalledWith(expect.stringContaining('Linux and macOS only'), 0, 'warning');
   });
 
   it('should honor the real device selection lists', async () => {

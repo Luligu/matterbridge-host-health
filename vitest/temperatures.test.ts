@@ -10,6 +10,12 @@ import path from 'node:path';
 
 import { readLinuxTemperatures, sampleCpuTemperatures, sensorSerial } from '../src/temperatures.js';
 
+const mockState = vi.hoisted(() => ({ platform: 'linux', readMacos: vi.fn() }));
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, default: { ...actual, platform: (): string => mockState.platform }, platform: (): string => mockState.platform };
+});
+vi.mock('../src/macos.js', () => ({ readMacosTemperatures: mockState.readMacos }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return { ...actual, realpath: vi.fn(actual.realpath), readdir: vi.fn(actual.readdir) };
@@ -24,6 +30,8 @@ async function file(name: string, text: string): Promise<void> {
 }
 
 beforeEach(async () => {
+  mockState.platform = 'linux';
+  mockState.readMacos.mockReset();
   vi.mocked(realpath).mockReset();
   root = await mkdtemp(path.join(os.tmpdir(), 'host-health-'));
 });
@@ -121,5 +129,20 @@ describe('updates from startup sources', () => {
     expect((await sampleCpuTemperatures(sources))[0].celsius).toBeNull();
     expect(vi.mocked(readdir)).not.toHaveBeenCalled();
     expect(await sampleCpuTemperatures([{ id: 'missing', name: 'CPU', celsius: 10 }])).toEqual([{ id: 'missing', name: 'CPU', celsius: null }]);
+    expect(await sampleCpuTemperatures([])).toEqual([]);
+  });
+
+  it('should sample macOS sensors using readMacosTemperatures', async () => {
+    mockState.platform = 'darwin';
+    mockState.readMacos.mockResolvedValue([{ id: 'darwin/PMU tdie1', name: 'PMU tdie1', celsius: 39.25 }]);
+    expect(
+      await sampleCpuTemperatures([
+        { id: 'darwin/PMU tdie1', name: 'PMU tdie1', celsius: 35 },
+        { id: 'darwin/PMU tdie2', name: 'PMU tdie2', celsius: 35 },
+      ]),
+    ).toEqual([
+      { id: 'darwin/PMU tdie1', name: 'PMU tdie1', celsius: 39.25 },
+      { id: 'darwin/PMU tdie2', name: 'PMU tdie2', celsius: null },
+    ]);
   });
 });
