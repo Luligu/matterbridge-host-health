@@ -29,6 +29,7 @@ import { BooleanState, BridgedDeviceBasicInformation, TemperatureMeasurement } f
 import { isValidInteger, isValidNumber, isValidString } from 'matterbridge/utils';
 import { bgBlue, info } from 'node-ansi-logger';
 
+import { HistoryCache } from './history.js';
 import { readMacosTemperatures } from './macos.js';
 import { type CpuTemperature, readLinuxTemperatures, sampleCpuTemperatures, sensorSerial } from './temperatures.js';
 
@@ -67,6 +68,10 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
   private readonly hostPlatform = platform();
   /** Whether a discovery or sampling error warning has already been logged. */
   private warned = false;
+  /** Circular temperature history for each device mapped to its serial number. */
+  readonly history = new Map<string, HistoryCache>();
+  /** Periodic history persistence timer handle when scheduled. */
+  private historyTimer?: ReturnType<typeof setInterval>;
 
   /**
    * Create the platform and validate configuration.
@@ -83,7 +88,7 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
     if (!this.verifyMatterbridgeVersion('3.11.0')) throw new Error('This plugin requires Matterbridge >= 3.11.0.');
     this.log.info(info`Initializing platform ${bgBlue.white`${this.config.name}`}...`);
     this.config.nodeLabels ??= {};
-    this.config.pollInterval = isValidInteger(this.config.pollInterval, 5, 3600) ? this.config.pollInterval : 30;
+    this.config.pollInterval = isValidInteger(this.config.pollInterval, 5, 3600) ? this.config.pollInterval : 60;
     this.config.temperatureAlert = isValidNumber(this.config.temperatureAlert, 0, 150) ? this.config.temperatureAlert : 70;
     this.config.sysfsPath = isValidString(this.config.sysfsPath, 1) && this.config.sysfsPath.trim() ? this.config.sysfsPath : '/sys';
     this.log.info(info`Platform ${bgBlue.white`${this.config.name}`} initialized successfully`);
@@ -105,6 +110,7 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
       return;
     }
     this.stopped = false;
+    await this.loadHistory();
     this.pending = this.createDevices();
     try {
       await this.pending;
@@ -112,6 +118,9 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
       this.pending = undefined;
     }
     this.schedule();
+    clearInterval(this.historyTimer);
+    this.historyTimer = setInterval(() => void this.saveHistory(), 60 * 60 * 1000);
+    this.historyTimer.unref();
     this.log.info(info`Platform ${bgBlue.white`${this.config.name}`} started successfully`);
   }
 
@@ -164,6 +173,11 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
     clearTimeout(this.timer);
     this.timer = undefined;
     await this.pending;
+    if (this.historyTimer) {
+      clearInterval(this.historyTimer);
+      this.historyTimer = undefined;
+      await this.saveHistory();
+    }
     await super.onShutdown(reason);
     this.log.info(info`Shutting down platform ${bgBlue.white`${this.config.name}`} with reason: ${reason ?? 'no reason provided'}...`);
     if (this.config.unregisterOnShutdown) await this.unregisterAllDevices();
@@ -220,6 +234,7 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
         await this.registerDevice(device);
         await this.configureNodeLabels(device);
         this.sources.push(reading);
+        this.addHistory(serial, reading.celsius);
       }
     } catch (error) {
       this.warnReadingError(error);
@@ -271,6 +286,10 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
       const readings = await sampleCpuTemperatures(this.sources);
       if (this.stopped) return;
       const values = new Map<string | undefined, number | null>(readings.map((reading) => [sensorSerial(`${hostname()}/${reading.id}`), reading.celsius]));
+      for (const source of this.sources) {
+        const serial = sensorSerial(`${hostname()}/${source.id}`);
+        this.addHistory(serial, values.get(serial) ?? null);
+      }
       for (const device of this.getDevices()) {
         const celsius = values.get(device.serialNumber);
         const valid = celsius !== null && celsius !== undefined;
@@ -287,6 +306,52 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
           await child.setAttribute(BooleanState, 'stateValue', true, this.log);
         }
       }
+    }
+  }
+
+  /**
+   * Append a temperature sample to the device history, creating the history when missing.
+   * @param {string} serial Device serial number.
+   * @param {number | null} celsius Temperature in degrees Celsius or null when unavailable.
+   * @returns {void} No return value.
+   */
+  private addHistory(serial: string, celsius: number | null): void {
+    let history = this.history.get(serial);
+    if (!history) this.history.set(serial, (history = new HistoryCache()));
+    history.add({ timestamp: Date.now(), celsius });
+  }
+
+  /**
+   * Load the persisted device histories from the platform context.
+   * @returns {Promise<void>} Resolves when the histories are loaded.
+   */
+  private async loadHistory(): Promise<void> {
+    this.history.clear();
+    if (!this.context) return;
+    try {
+      const stored = await this.context.get<Record<string, unknown>>('history', {});
+      for (const [serial, entries] of Object.entries(stored)) {
+        const history = new HistoryCache();
+        history.load(entries);
+        this.history.set(serial, history);
+      }
+      this.log.debug(`Loaded history for ${this.history.size} devices`);
+    } catch (error) {
+      this.log.warn(`Unable to load history: ${String(error)}`);
+    }
+  }
+
+  /**
+   * Persist the device histories to the platform context.
+   * @returns {Promise<void>} Resolves when the histories are saved.
+   */
+  private async saveHistory(): Promise<void> {
+    if (!this.context) return;
+    try {
+      await this.context.set('history', Object.fromEntries([...this.history].map(([serial, history]) => [serial, history.get()])));
+      this.log.debug(`Saved history for ${this.history.size} devices`);
+    } catch (error) {
+      this.log.warn(`Unable to save history: ${String(error)}`);
     }
   }
 

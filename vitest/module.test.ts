@@ -304,11 +304,11 @@ describe('host health lifecycle', () => {
 });
 
 describe('configuration and sampling edge cases', () => {
-  it.each([undefined, 4, 3601, 5.5, Number.NaN])('should default invalid or omitted polling interval %s to 30 seconds', async (pollInterval) => {
+  it.each([undefined, 4, 3601, 5.5, Number.NaN])('should default invalid or omitted polling interval %s to 60 seconds', async (pollInterval) => {
     await instance.onShutdown();
     const pluginConfig = {
       ...config,
-      pollInterval: pollInterval ?? 30,
+      pollInterval: pollInterval ?? 60,
       temperatureAlert: pollInterval === 4 ? -1 : pollInterval === 5.5 ? 151 : (pollInterval ?? 70),
       sysfsPath: '',
     };
@@ -318,7 +318,7 @@ describe('configuration and sampling edge cases', () => {
     }
     instance = initializePlugin(matterbridge, log, pluginConfig);
     expect(instance.config).toBe(pluginConfig);
-    expect(instance.config.pollInterval).toBe(30);
+    expect(instance.config.pollInterval).toBe(60);
     expect(instance.config.temperatureAlert).toBe(70);
     expect(instance.config.sysfsPath).toBe('/sys');
     addMatterbridge(instance);
@@ -326,7 +326,7 @@ describe('configuration and sampling edge cases', () => {
     await instance.onStart();
     expect(state.read).toHaveBeenCalledExactlyOnceWith('/sys');
     state.sample.mockClear();
-    await vi.advanceTimersByTimeAsync(29999);
+    await vi.advanceTimersByTimeAsync(59999);
     expect(state.sample).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(state.sample).toHaveBeenCalledOnce();
@@ -469,4 +469,58 @@ it('should update known sensors with an unavailable value', async () => {
   state.sample.mockResolvedValue([{ id: 'cpu0', name: 'Core 0', celsius: null }]);
   await instance.onConfigure();
   expect(instance.getDevices().map((device) => device.getAttribute(TemperatureMeasurement, 'measuredValue'))).toEqual([null, null]);
+});
+
+describe('device history', () => {
+  it('should record samples per serial number, save them hourly and on shutdown, and reload them on start', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+    await instance.ready;
+    await instance.context?.set('history', {});
+    await instance.onStart();
+    const serials = instance.getDevices().map((device) => device.serialNumber ?? '');
+    expect(
+      serials.map((serial) =>
+        instance.history
+          .get(serial)
+          ?.get()
+          .map((entry) => entry.celsius),
+      ),
+    ).toEqual([[42.25], [45]]);
+    state.sample.mockResolvedValue([{ id: 'cpu0', name: 'Core 0', celsius: 50 }]);
+    const context = instance.context;
+    if (!context) throw new Error('Missing platform context');
+    const set = vi.spyOn(context, 'set');
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(set).toHaveBeenCalledWith('history', expect.objectContaining({ [serials[1]]: expect.arrayContaining([{ timestamp: expect.any(Number), celsius: null }]) }));
+    set.mockClear();
+    await instance.onShutdown();
+    expect(set).toHaveBeenCalledOnce();
+    const saved = instance.history.get(serials[0])?.get();
+    instance = initializePlugin(matterbridge, log, { ...config, whiteList: [], blackList: [] });
+    addMatterbridge(instance);
+    state.read.mockResolvedValue([]);
+    expectedWarnings = ['No CPU temperatures found. Check Linux sensor availability and sysfs permissions.'];
+    await instance.onStart();
+    expect(instance.history.get(serials[0])?.get()).toEqual(saved);
+  });
+
+  it('should warn when the history cannot be loaded or saved', async () => {
+    await instance.ready;
+    const context = instance.context;
+    if (!context) throw new Error('Missing platform context');
+    const get = vi.spyOn(context, 'get').mockRejectedValueOnce(new Error('load failed'));
+    const set = vi.spyOn(context, 'set').mockRejectedValueOnce('save failed');
+    expectedWarnings = ['Unable to load history: Error: load failed', 'Unable to save history: save failed'];
+    await instance.onStart();
+    await instance.onShutdown();
+    expect(get).toHaveBeenCalled();
+    expect(set).toHaveBeenCalled();
+  });
+
+  it('should skip history persistence when the platform context is unavailable', async () => {
+    await instance.ready;
+    instance.context = undefined;
+    await instance.onStart();
+    expect(instance.history.size).toBe(2);
+  });
 });

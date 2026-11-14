@@ -35,6 +35,7 @@ If you like this project and find it useful, please consider giving it a star on
 
 ### Added
 
+- [history]: Add a circular temperature history per device serial number, loaded from the platform context on start and saved every 60 minutes and on shutdown.
 - [platform]: Implement `onChangeLoggerLevel` to update the platform and registered device logger levels.
 - [config]: Add `temperatureAlert` threshold setting (default `70` °C) and expose a child `contactSensor` (`BooleanState`) endpoint on each device that opens when the temperature exceeds `temperatureAlert`.
 - [macos]: Add macOS (Apple Silicon) CPU/SoC temperature discovery and sampling via IOKit HID thermal sensors using optional [koffi](https://koffi.dev) FFI without `sudo`.
@@ -42,6 +43,7 @@ If you like this project and find it useful, please consider giving it a star on
 
 ### Changed
 
+- [config]: Change the default `pollInterval` from 30 to 60 seconds.
 - [package]: Bump `node-ansi-logger` to v.3.3.2.
 - [package]: Bump `node-persist-manager` to v.2.1.2.
 - [package]: Bump `@vitest/coverage-v8` to v.5.1.0.

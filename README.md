@@ -30,6 +30,7 @@ A Linux and macOS (Apple Silicon) Matterbridge plugin that exposes host CPU temp
 - Linux discovery through CPU `hwmon` drivers and CPU-labelled channels, with CPU thermal zones as a fallback when no hwmon CPU channels exist.
 - macOS (Apple Silicon) discovery through IOKit HID thermal sensors (`PMU tdie*`, `SOC MTR*`, `pACC MTR*`, `eACC MTR*`) via `koffi`, without `sudo`.
 - Periodic updates, stable device identities and the standard Matterbridge device selection lists.
+- A circular temperature history per device (last 2880 samples, 48 hours at the default 60 s poll), persisted in the platform context, loaded on start and saved every 60 minutes and on shutdown.
 - Missing, unreadable or invalid temperatures are reported as unavailable, never as zero.
 - Unsupported operating systems show a warning snackbar and create no devices.
 
@@ -43,7 +44,7 @@ Add `matterbridge-host-health` in the Matterbridge frontend once the package is 
 
 | Setting                | Default | Description                                                                   |
 | ---------------------- | ------- | ----------------------------------------------------------------------------- |
-| `pollInterval`         | `30`    | Reading interval in seconds, from 5 to 3600. Invalid values fall back to 30.  |
+| `pollInterval`         | `60`    | Reading interval in seconds, from 5 to 3600. Invalid values fall back to 60.  |
 | `temperatureAlert`     | `70`    | Temperature threshold in °C (0–150) above which the contact sensor opens.     |
 | `sysfsPath`            | `/sys`  | Linux sysfs root, including a Docker bind mount if used.                      |
 | `whiteList`            | `[]`    | Expose only selected device names or serial numbers. Empty exposes all.       |
@@ -82,7 +83,7 @@ Then set the plugin configuration:
 ```json
 {
   "sysfsPath": "/host-sys",
-  "pollInterval": 30
+  "pollInterval": 60
 }
 ```
 
