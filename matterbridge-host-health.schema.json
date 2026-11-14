@@ -63,6 +63,14 @@
       "maximum": 3600,
       "default": 30
     },
+    "temperatureAlert": {
+      "title": "Temperature alert",
+      "description": "Temperature threshold in degrees Celsius above which the contact sensor opens.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 150,
+      "default": 70
+    },
     "sysfsPath": {
       "title": "Linux sysfs path",
       "description": "Root of the Linux host sysfs mount.",

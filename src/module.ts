@@ -23,10 +23,10 @@
 
 import { hostname, platform } from 'node:os';
 
-import { type BasePlatformConfig, MatterbridgeDynamicPlatform, MatterbridgeEndpoint, type PlatformMatterbridge, temperatureSensor } from 'matterbridge';
-import type { AnsiLogger } from 'matterbridge/logger';
-import { BridgedDeviceBasicInformation, TemperatureMeasurement } from 'matterbridge/matter/clusters';
-import { isValidInteger, isValidString } from 'matterbridge/utils';
+import { type BasePlatformConfig, MatterbridgeDynamicPlatform, MatterbridgeEndpoint, type PlatformMatterbridge, contactSensor, temperatureSensor } from 'matterbridge';
+import type { AnsiLogger, LogLevel } from 'matterbridge/logger';
+import { BooleanState, BridgedDeviceBasicInformation, TemperatureMeasurement } from 'matterbridge/matter/clusters';
+import { isValidInteger, isValidNumber, isValidString } from 'matterbridge/utils';
 import { bgBlue, info } from 'node-ansi-logger';
 
 import { type CpuTemperature, readLinuxTemperatures, sampleCpuTemperatures, sensorSerial } from './temperatures.js';
@@ -37,6 +37,7 @@ export type HostHealthPlatformConfig = BasePlatformConfig & {
   blackList: string[];
   nodeLabels: Record<string, { name?: string }>;
   pollInterval: number;
+  temperatureAlert: number;
   sysfsPath: string;
 };
 
@@ -53,12 +54,17 @@ export default function initializePlugin(matterbridge: PlatformMatterbridge, log
 
 /** Exposes discovered host CPU readings as bridged temperature sensors. */
 export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
+  /** Active polling timer handle when scheduled. */
   private timer?: ReturnType<typeof setTimeout>;
+  /** In-flight discovery or temperature refresh promise. */
   private pending?: Promise<void>;
+  /** Whether polling and updates are currently stopped. */
   private stopped = true;
-  private readonly sensors = new Map<string, MatterbridgeEndpoint>();
+  /** Discovered CPU sensor sources retained for periodic sampling. */
   private readonly sources: CpuTemperature[] = [];
+  /** Current host operating system platform identifier. */
   private readonly hostPlatform = platform();
+  /** Whether a discovery or sampling error warning has already been logged. */
   private warned = false;
 
   /**
@@ -77,6 +83,7 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
     this.log.info(info`Initializing platform ${bgBlue.white`${this.config.name}`}...`);
     this.config.nodeLabels ??= {};
     this.config.pollInterval = isValidInteger(this.config.pollInterval, 5, 3600) ? this.config.pollInterval : 30;
+    this.config.temperatureAlert = isValidNumber(this.config.temperatureAlert, 0, 150) ? this.config.temperatureAlert : 70;
     this.config.sysfsPath = isValidString(this.config.sysfsPath, 1) && this.config.sysfsPath.trim() ? this.config.sysfsPath : '/sys';
     this.log.info(info`Platform ${bgBlue.white`${this.config.name}`} initialized successfully`);
   }
@@ -132,6 +139,21 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
   }
 
   /**
+   * Update the logger level for the platform and all registered devices.
+   * @param {LogLevel} logLevel New logger level.
+   * @returns {Promise<void>} Resolves when the logger level has been updated.
+   */
+  // oxlint-disable-next-line typescript/require-await
+  override async onChangeLoggerLevel(logLevel: LogLevel): Promise<void> {
+    this.log.info(info`Changing logger level of platform ${bgBlue.white`${this.config.name}`} to ${logLevel}...`);
+    this.log.logLevel = logLevel;
+    for (const device of this.getDevices()) {
+      device.log.logLevel = logLevel;
+    }
+    this.log.info(info`Platform ${bgBlue.white`${this.config.name}`} logger level changed successfully to ${logLevel}`);
+  }
+
+  /**
    * Stop polling and await any active read before shutdown.
    * @param {string} [reason] Shutdown reason.
    * @returns {Promise<void>} Resolves when cleanup finishes.
@@ -139,11 +161,11 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
   override async onShutdown(reason?: string): Promise<void> {
     this.stopped = true;
     clearTimeout(this.timer);
+    this.timer = undefined;
     await this.pending;
     await super.onShutdown(reason);
     this.log.info(info`Shutting down platform ${bgBlue.white`${this.config.name}`} with reason: ${reason ?? 'no reason provided'}...`);
     if (this.config.unregisterOnShutdown) await this.unregisterAllDevices();
-    this.sensors.clear();
     this.sources.length = 0;
     this.log.info(info`Platform ${bgBlue.white`${this.config.name}`} shut down successfully`);
   }
@@ -178,7 +200,7 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
       }
       for (const reading of readings) {
         const serial = sensorSerial(`${hostname()}/${reading.id}`);
-        if (this.sensors.has(serial)) continue;
+        if (this.getDeviceBySerialNumber(serial)) continue;
         const name = `${hostname()} ${reading.name}`;
         this.setSelectDevice(serial, name);
         if (!this.validateDevice([name, serial])) continue;
@@ -186,9 +208,12 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
           .createDefaultBridgedDeviceBasicInformationClusterServer(name.slice(0, 32), serial, this.matterbridge.aggregatorVendorId, 'Matterbridge', 'Host CPU Temperature')
           .createDefaultTemperatureMeasurementClusterServer(reading.celsius === null ? null : Math.round(reading.celsius * 100))
           .addRequiredClusters();
+        device
+          .addChildDeviceType('TemperatureAlert', contactSensor)
+          .createDefaultBooleanStateClusterServer(reading.celsius === null || reading.celsius <= this.config.temperatureAlert)
+          .addRequiredClusters();
         await this.registerDevice(device);
         await this.configureNodeLabels(device);
-        this.sensors.set(serial, device);
         this.sources.push(reading);
       }
     } catch (error) {
@@ -240,14 +265,23 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
     try {
       const readings = await sampleCpuTemperatures(this.sources);
       if (this.stopped) return;
-      const values = new Map(readings.map((reading) => [sensorSerial(`${hostname()}/${reading.id}`), reading.celsius]));
-      for (const [serial, device] of this.sensors) {
-        const celsius = values.get(serial);
-        await device.setAttribute(TemperatureMeasurement, 'measuredValue', celsius === null || celsius === undefined ? null : Math.round(celsius * 100), this.log);
+      const values = new Map<string | undefined, number | null>(readings.map((reading) => [sensorSerial(`${hostname()}/${reading.id}`), reading.celsius]));
+      for (const device of this.getDevices()) {
+        const celsius = values.get(device.serialNumber);
+        const valid = celsius !== null && celsius !== undefined;
+        await device.setAttribute(TemperatureMeasurement, 'measuredValue', valid ? Math.round(celsius * 100) : null, this.log);
+        for (const child of device.getChildEndpoints()) {
+          await child.setAttribute(BooleanState, 'stateValue', !(valid && celsius > this.config.temperatureAlert), this.log);
+        }
       }
     } catch (error) {
       this.warnReadingError(error);
-      for (const device of this.sensors.values()) await device.setAttribute(TemperatureMeasurement, 'measuredValue', null, this.log);
+      for (const device of this.getDevices()) {
+        await device.setAttribute(TemperatureMeasurement, 'measuredValue', null, this.log);
+        for (const child of device.getChildEndpoints()) {
+          await child.setAttribute(BooleanState, 'stateValue', true, this.log);
+        }
+      }
     }
   }
 

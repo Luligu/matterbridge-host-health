@@ -5,6 +5,7 @@
   "blackList": [],
   "nodeLabels": {},
   "pollInterval": 30,
+  "temperatureAlert": 70,
   "sysfsPath": "/sys",
   "debug": false,
   "unregisterOnShutdown": false

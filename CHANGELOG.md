@@ -33,6 +33,11 @@ If you like this project and find it useful, please consider giving it a star on
 
 ## [1.0.2] - Dev branch
 
+### Added
+
+- [platform]: Implement `onChangeLoggerLevel` to update the platform and registered device logger levels.
+- [config]: Add `temperatureAlert` threshold setting (default `70` °C) and expose a child `contactSensor` (`BooleanState`) endpoint on each device that opens when the temperature exceeds `temperatureAlert`.
+
 ### Changed
 
 - [package]: Bump `node-ansi-logger` to v.3.3.2.

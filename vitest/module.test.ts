@@ -5,7 +5,8 @@
  */
 
 import type { PlatformMatterbridge } from 'matterbridge';
-import { BridgedDeviceBasicInformation, TemperatureMeasurement } from 'matterbridge/matter/clusters';
+import { LogLevel } from 'matterbridge/logger';
+import { BooleanState, BridgedDeviceBasicInformation, TemperatureMeasurement } from 'matterbridge/matter/clusters';
 import {
   addMatterbridge,
   createServerNode,
@@ -46,6 +47,7 @@ const config: HostHealthPlatformConfig = {
   blackList: [],
   nodeLabels: {},
   pollInterval: 5,
+  temperatureAlert: 70,
   sysfsPath: '/sys',
   debug: false,
   unregisterOnShutdown: true,
@@ -111,6 +113,21 @@ describe('host health lifecycle', () => {
     await instance.onConfigChanged(withoutLabels);
     expect(instance.config.nodeLabels).toEqual({});
     expect(device.getAttribute(BridgedDeviceBasicInformation, 'nodeLabel')).toBe('Updated CPU');
+  });
+
+  it('should update platform and device logger levels when onChangeLoggerLevel is called', async () => {
+    await instance.onStart();
+    const devices = instance.getDevices();
+    expect(devices).toHaveLength(2);
+    const previousLevel = instance.log.logLevel;
+    await instance.onChangeLoggerLevel(LogLevel.DEBUG);
+    expect(instance.log.logLevel).toBe(LogLevel.DEBUG);
+    for (const device of devices) {
+      expect(device.log.logLevel).toBe(LogLevel.DEBUG);
+    }
+    expect(loggerInfoSpy).toHaveBeenCalledWith(info`Changing logger level of platform ${bgBlue.white`${config.name}`} to ${LogLevel.DEBUG}...`);
+    expect(loggerInfoSpy).toHaveBeenCalledWith(info`Platform ${bgBlue.white`${config.name}`} logger level changed successfully to ${LogLevel.DEBUG}`);
+    await instance.onChangeLoggerLevel(previousLevel);
   });
 
   it('should apply configured node labels to matching devices and log the changes', async () => {
@@ -266,11 +283,20 @@ describe('host health lifecycle', () => {
 describe('configuration and sampling edge cases', () => {
   it.each([undefined, 4, 3601, 5.5, Number.NaN])('should default invalid or omitted polling interval %s to 30 seconds', async (pollInterval) => {
     await instance.onShutdown();
-    const pluginConfig = { ...config, pollInterval: pollInterval ?? 30, sysfsPath: '' };
-    if (pollInterval === undefined) Reflect.deleteProperty(pluginConfig, 'pollInterval');
+    const pluginConfig = {
+      ...config,
+      pollInterval: pollInterval ?? 30,
+      temperatureAlert: pollInterval === 4 ? -1 : pollInterval === 5.5 ? 151 : (pollInterval ?? 70),
+      sysfsPath: '',
+    };
+    if (pollInterval === undefined) {
+      Reflect.deleteProperty(pluginConfig, 'pollInterval');
+      Reflect.deleteProperty(pluginConfig, 'temperatureAlert');
+    }
     instance = initializePlugin(matterbridge, log, pluginConfig);
     expect(instance.config).toBe(pluginConfig);
     expect(instance.config.pollInterval).toBe(30);
+    expect(instance.config.temperatureAlert).toBe(70);
     expect(instance.config.sysfsPath).toBe('/sys');
     addMatterbridge(instance);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -288,12 +314,31 @@ describe('configuration and sampling edge cases', () => {
     state.read.mockResolvedValue([{ id: 'cpu0', name: 'Core 0', celsius: null }]);
     await instance.onStart('test');
     expect(instance.getDevices()[0].getAttribute(TemperatureMeasurement, 'measuredValue')).toBeNull();
+    expect(instance.getDevices()[0].getChildEndpoints()[0].getAttribute(BooleanState, 'stateValue')).toBe(true);
     const devices = instance.getDevices();
     const unregister = vi.spyOn(instance, 'unregisterAllDevices');
     await instance.onShutdown();
     expect(unregister).not.toHaveBeenCalled();
     for (const device of devices) await device.delete();
     instance.config.unregisterOnShutdown = true;
+  });
+
+  it('should update child contact sensor state when temperature crosses temperatureAlert', async () => {
+    state.read.mockResolvedValue([
+      { id: 'cpu0', name: 'Core 0', celsius: 70 },
+      { id: 'cpu1', name: 'Core 1', celsius: 75 },
+    ]);
+    await instance.onStart();
+    const devices = instance.getDevices();
+    expect(devices[0].getChildEndpoints()[0].getAttribute(BooleanState, 'stateValue')).toBe(true);
+    expect(devices[1].getChildEndpoints()[0].getAttribute(BooleanState, 'stateValue')).toBe(false);
+    state.sample.mockResolvedValue([
+      { id: 'cpu0', name: 'Core 0', celsius: 71 },
+      { id: 'cpu1', name: 'Core 1', celsius: 65 },
+    ]);
+    await instance.onConfigure();
+    expect(devices[0].getChildEndpoints()[0].getAttribute(BooleanState, 'stateValue')).toBe(false);
+    expect(devices[1].getChildEndpoints()[0].getAttribute(BooleanState, 'stateValue')).toBe(true);
   });
 
   it('should mark existing readings unavailable on non-Error sampling failures', async () => {
