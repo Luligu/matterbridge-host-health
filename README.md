@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/matterbridge-host-health.svg)](https://www.npmjs.com/package/matterbridge-host-health)
 [![npm downloads](https://img.shields.io/npm/dt/matterbridge-host-health.svg)](https://www.npmjs.com/package/matterbridge-host-health)
 [![Docker Version](https://img.shields.io/docker/v/luligu/matterbridge/latest?label=docker%20version)](https://hub.docker.com/r/luligu/matterbridge)
-[![Docker Pulls](https://img.shields.io/docker/pulls/luligu/matterbridge?label=docker%20pulls)](https://hub.docker.com/r/luligu/matterbridge)
+[![Docker Pulls](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/Luligu/b21088ab9c9f2b119b42c33f0fef218d/raw/docker.json)](https://hub.docker.com/r/luligu/matterbridge)
 ![Node.js CI](https://github.com/Luligu/matterbridge-host-health/actions/workflows/build.yml/badge.svg)
 ![CodeQL](https://github.com/Luligu/matterbridge-host-health/actions/workflows/codeql.yml/badge.svg)
 [![codecov](https://codecov.io/gh/Luligu/matterbridge-host-health/branch/main/graph/badge.svg)](https://codecov.io/gh/Luligu/matterbridge-host-health)
@@ -21,17 +21,29 @@
 
 ---
 
-A Linux-only Matterbridge plugin that exposes host CPU temperatures as Matter temperature sensor devices.
+A Linux and macOS (Apple Silicon) Matterbridge plugin that exposes host CPU temperatures as Matter temperature sensor devices.
 
 ## Features
 
 - One temperature sensor per detected CPU channel (package, core, die or CCD).
+- A child contact sensor (`BooleanState`) per device that opens when the temperature exceeds `temperatureAlert` (default `70` °C).
 - Linux discovery through CPU `hwmon` drivers and CPU-labelled channels, with CPU thermal zones as a fallback when no hwmon CPU channels exist.
+- macOS (Apple Silicon) discovery through IOKit HID thermal sensors (`PMU tdie*`, `SOC MTR*`, `pACC MTR*`, `eACC MTR*`) via `koffi`, without `sudo`.
 - Periodic updates, stable device identities and the standard Matterbridge device selection lists.
+- A circular temperature history per device (last 2880 samples, 48 hours at the default 60 s poll), persisted in the platform context, loaded on start and saved every 60 minutes and on shutdown.
+- A plugin frontend with a temperature graph for each registered device, backed by the plugin API endpoints `api/devices`, `api/device?serial=<serial>` and `api/device-history?serial=<serial>`. Each device `configUrl` opens the graph of that single device.
 - Missing, unreadable or invalid temperatures are reported as unavailable, never as zero.
 - Unsupported operating systems show a warning snackbar and create no devices.
 
 Requires Matterbridge 3.11.0 or later.
+
+## Frontend
+
+The plugin frontend shows the current temperature and a 48-hour history graph for each registered device, refreshed every minute. Open it from the plugin page in Matterbridge, or from a device's configuration link to see only that device.
+
+<p align="center">
+  <img src="./screenshots/frontend.png" alt="Matterbridge Host Health frontend showing a temperature history graph for each device" width="800">
+</p>
 
 ## Installation
 
@@ -41,7 +53,8 @@ Add `matterbridge-host-health` in the Matterbridge frontend once the package is 
 
 | Setting                | Default | Description                                                                   |
 | ---------------------- | ------- | ----------------------------------------------------------------------------- |
-| `pollInterval`         | `30`    | Reading interval in seconds, from 5 to 3600. Invalid values fall back to 30.  |
+| `pollInterval`         | `60`    | Reading interval in seconds, from 5 to 3600. Invalid values fall back to 60.  |
+| `temperatureAlert`     | `70`    | Temperature threshold in °C (0–150) above which the contact sensor opens.     |
 | `sysfsPath`            | `/sys`  | Linux sysfs root, including a Docker bind mount if used.                      |
 | `whiteList`            | `[]`    | Expose only selected device names or serial numbers. Empty exposes all.       |
 | `blackList`            | `[]`    | Exclude selected devices.                                                     |
@@ -79,7 +92,7 @@ Then set the plugin configuration:
 ```json
 {
   "sysfsPath": "/host-sys",
-  "pollInterval": 30
+  "pollInterval": 60
 }
 ```
 
@@ -143,6 +156,6 @@ Licensed under the [Apache License 2.0](./LICENSE).
 
 ## Support the project
 
-If you find this project useful, please consider giving it a star on GitHub and sponsoring it. Your support helps maintain and improve the project.
+If you find this project useful, please consider giving it a star on [GitHub](https://github.com/Luligu/matterbridge-host-health) and sponsoring it. Your support helps maintain and improve the project.
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/yellow_img.png)](https://www.buymeacoffee.com/luligugithub)

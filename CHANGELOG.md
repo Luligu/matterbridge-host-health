@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/matterbridge-host-health.svg)](https://www.npmjs.com/package/matterbridge-host-health)
 [![npm downloads](https://img.shields.io/npm/dt/matterbridge-host-health.svg)](https://www.npmjs.com/package/matterbridge-host-health)
 [![Docker Version](https://img.shields.io/docker/v/luligu/matterbridge/latest?label=docker%20version)](https://hub.docker.com/r/luligu/matterbridge)
-[![Docker Pulls](https://img.shields.io/docker/pulls/luligu/matterbridge?label=docker%20pulls)](https://hub.docker.com/r/luligu/matterbridge)
+[![Docker Pulls](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/Luligu/b21088ab9c9f2b119b42c33f0fef218d/raw/docker.json)](https://hub.docker.com/r/luligu/matterbridge)
 ![Node.js CI](https://github.com/Luligu/matterbridge-host-health/actions/workflows/build.yml/badge.svg)
 ![CodeQL](https://github.com/Luligu/matterbridge-host-health/actions/workflows/codeql.yml/badge.svg)
 [![codecov](https://codecov.io/gh/Luligu/matterbridge-host-health/branch/main/graph/badge.svg)](https://codecov.io/gh/Luligu/matterbridge-host-health)
@@ -30,6 +30,55 @@ If you like this project and find it useful, please consider giving it a star on
 <a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="120"></a>
 
 ---
+
+## [1.0.2] - 2026-11-14
+
+### Added
+
+- [frontend]: Add a temperature history graph for each registered device, refreshed every minute.
+- [api]: Add the `devices`, `device?serial=<serial>` and `device-history?serial=<serial>` plugin API endpoints served by `onFetch`; device names use the configured node label when set.
+- [device]: Set each device `configUrl` to open the frontend graph of that single device.
+- [history]: Add a circular temperature history per device serial number, loaded from the platform context on start and saved every 60 minutes and on shutdown.
+- [platform]: Implement `onChangeLoggerLevel` to update the platform and registered device logger levels.
+- [config]: Add `temperatureAlert` threshold setting (default `70` °C) and expose a child `contactSensor` (`BooleanState`) endpoint on each device that opens when the temperature exceeds `temperatureAlert`.
+- [macos]: Add macOS (Apple Silicon) CPU/SoC temperature discovery and sampling via IOKit HID thermal sensors using optional [koffi](https://koffi.dev) FFI without `sudo`.
+- [package]: Add optional [koffi](https://koffi.dev) v.3.3.8 dependency.
+
+### Changed
+
+- [config]: Change the default `pollInterval` from 30 to 60 seconds.
+- [package]: Bump `node-ansi-logger` to v.3.3.2.
+- [package]: Bump `node-persist-manager` to v.2.1.2.
+- [package]: Bump `@vitest/coverage-v8` to v.5.1.0.
+- [package]: Bump `oxfmt` to v.0.78.0.
+- [package]: Bump `oxlint` to v.1.93.0.
+- [package]: Bump `oxlint-tsgolint` to v.7.0.2007.
+- [package]: Bump `vitest` to v.5.1.0.
+- [agents]: Update `.agents/README.md` to v.1.0.6.
+- [agents]: Update `.agents/rules/chip-tests.instructions.md`, `.claude/rules/chip-tests/chip-tests.instructions.md` and `.github/instructions/chip-tests/chip-tests.instructions.md` to v.1.0.1.
+- [agents]: Update `.agents/rules/matterbridge.instructions.md`, `.claude/rules/matterbridge/matterbridge.instructions.md` and `.github/instructions/matterbridge/matterbridge.instructions.md` to v.1.0.4.
+- [agents]: Update `.agents/rules/plugin-frontend.instructions.md`, `.claude/rules/plugin-frontend/plugin-frontend.instructions.md` and `.github/instructions/plugin-frontend/plugin-frontend.instructions.md` to v.1.0.3.
+- [agents]: Update `.agents/rules/testing.instructions.md`, `.claude/rules/testing/testing.instructions.md` and `.github/instructions/testing/testing.instructions.md` to v.1.0.8.
+- [agents]: Update `.agents/skills/verify-agent-context/SKILL.md`, `.claude/skills/verify-agent-context/SKILL.md` and `.github/skills/verify-agent-context/SKILL.md` to v.1.0.6.
+- [agents]: Update `.antigravity/settings.json` to v.1.0.6.
+- [agents]: Update `.claude/settings.json` to v.1.0.12.
+- [codex]: Update `.codex/config.toml` to v.1.0.8.
+- [codex]: Update `.codex/rules/default.rules` to v.1.0.8.
+- [workflows]: Update `.github/workflows/build.yml` to v.2.0.8.
+- [workflows]: Update `.github/workflows/codecov.yml` to v.2.0.8.
+- [workflows]: Update `.github/workflows/codeql.yml` to v.2.0.0.
+- [workflows]: Update `.github/workflows/publish.yml` to v.2.0.7.
+- [config]: Update `.gitignore` to v.1.0.5.
+- [config]: Update `.oxfmtrc.json` to v.1.2.0.
+- [config]: Update `.oxlintrc.json` to v.1.2.0.
+- [vscode]: Update `.vscode/extensions.json` to v.1.0.6.
+- [vscode]: Update `.vscode/settings.json` to v.1.0.21.
+- [agents]: Update `AGENTS.md` to v.1.0.12.
+- [config]: Update `SHARED-AGENTS.md` to v.1.0.0.
+- [styleguide]: Update `STYLEGUIDE.md` to v.1.1.1.
+- [config]: Update `vitest.config.ts` to v.2.0.9.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
 
 ## [1.0.1] - 2026-10-31
 

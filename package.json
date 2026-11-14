@@ -1,7 +1,7 @@
 {
   "name": "matterbridge-host-health",
-  "version": "1.0.1",
-  "description": "Matterbridge host CPU temperature sensors for Linux",
+  "version": "1.0.2",
+  "description": "Matterbridge host CPU temperature monitoring for Linux / macOS",
   "author": "https://github.com/Luligu",
   "license": "Apache-2.0",
   "homepage": "https://www.npmjs.com/package/matterbridge-host-health",
@@ -60,6 +60,7 @@
   "files": [
     "bin",
     "dist",
+    "apps/frontend/build",
     "npm-shrinkwrap.json",
     "CHANGELOG.md",
     "*.config.json",
@@ -73,6 +74,7 @@
     "version": false,
     "publish": false,
     "chip": false,
+    "frontend": true,
     "coverage": {
       "lines": 100,
       "functions": 100,
@@ -112,16 +114,20 @@
     "prepublishOnly": "npm run cleanBuildProduction && node scripts/prepublish-clean.mjs && npm install --no-fund --no-audit --omit=dev && npm shrinkwrap --omit=dev"
   },
   "dependencies": {
-    "node-ansi-logger": "3.3.1",
-    "node-persist-manager": "2.1.1"
+    "node-ansi-logger": "3.3.2",
+    "node-persist-manager": "2.1.2"
   },
   "devDependencies": {
     "@types/node": "26.6.6",
-    "@vitest/coverage-v8": "5.0.5",
-    "oxfmt": "0.75.0",
-    "oxlint": "1.90.0",
-    "oxlint-tsgolint": "7.0.2005",
+    "@vitest/coverage-v8": "5.1.0",
+    "jsdom": "31.0.1",
+    "oxfmt": "0.78.0",
+    "oxlint": "1.93.0",
+    "oxlint-tsgolint": "7.0.2007",
     "typescript": "7.0.2",
-    "vitest": "5.0.5"
+    "vitest": "5.1.0"
+  },
+  "optionalDependencies": {
+    "koffi": "3.3.8"
   }
 }

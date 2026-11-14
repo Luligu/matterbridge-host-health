@@ -23,12 +23,14 @@
 
 import { hostname, platform } from 'node:os';
 
-import { type BasePlatformConfig, MatterbridgeDynamicPlatform, MatterbridgeEndpoint, type PlatformMatterbridge, temperatureSensor } from 'matterbridge';
-import type { AnsiLogger } from 'matterbridge/logger';
-import { BridgedDeviceBasicInformation, TemperatureMeasurement } from 'matterbridge/matter/clusters';
-import { isValidInteger, isValidString } from 'matterbridge/utils';
+import { type BasePlatformConfig, MatterbridgeDynamicPlatform, MatterbridgeEndpoint, type PlatformMatterbridge, contactSensor, temperatureSensor } from 'matterbridge';
+import type { AnsiLogger, LogLevel } from 'matterbridge/logger';
+import { BooleanState, BridgedDeviceBasicInformation, TemperatureMeasurement } from 'matterbridge/matter/clusters';
+import { isValidInteger, isValidNumber, isValidString } from 'matterbridge/utils';
 import { bgBlue, info } from 'node-ansi-logger';
 
+import { HistoryCache } from './history.js';
+import { readMacosTemperatures } from './macos.js';
 import { type CpuTemperature, readLinuxTemperatures, sampleCpuTemperatures, sensorSerial } from './temperatures.js';
 
 /** Configuration for host CPU temperature discovery. */
@@ -37,6 +39,7 @@ export type HostHealthPlatformConfig = BasePlatformConfig & {
   blackList: string[];
   nodeLabels: Record<string, { name?: string }>;
   pollInterval: number;
+  temperatureAlert: number;
   sysfsPath: string;
 };
 
@@ -53,13 +56,22 @@ export default function initializePlugin(matterbridge: PlatformMatterbridge, log
 
 /** Exposes discovered host CPU readings as bridged temperature sensors. */
 export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
+  /** Active polling timer handle when scheduled. */
   private timer?: ReturnType<typeof setTimeout>;
+  /** In-flight discovery or temperature refresh promise. */
   private pending?: Promise<void>;
+  /** Whether polling and updates are currently stopped. */
   private stopped = true;
-  private readonly sensors = new Map<string, MatterbridgeEndpoint>();
+  /** Discovered CPU sensor sources retained for periodic sampling. */
   private readonly sources: CpuTemperature[] = [];
+  /** Current host operating system platform identifier. */
   private readonly hostPlatform = platform();
+  /** Whether a discovery or sampling error warning has already been logged. */
   private warned = false;
+  /** Circular temperature history for each device mapped to its serial number. */
+  readonly history = new Map<string, HistoryCache>();
+  /** Periodic history persistence timer handle when scheduled. */
+  private historyTimer?: ReturnType<typeof setInterval>;
 
   /**
    * Create the platform and validate configuration.
@@ -76,7 +88,8 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
     if (!this.verifyMatterbridgeVersion('3.11.0')) throw new Error('This plugin requires Matterbridge >= 3.11.0.');
     this.log.info(info`Initializing platform ${bgBlue.white`${this.config.name}`}...`);
     this.config.nodeLabels ??= {};
-    this.config.pollInterval = isValidInteger(this.config.pollInterval, 5, 3600) ? this.config.pollInterval : 30;
+    this.config.pollInterval = isValidInteger(this.config.pollInterval, 5, 3600) ? this.config.pollInterval : 60;
+    this.config.temperatureAlert = isValidNumber(this.config.temperatureAlert, 0, 150) ? this.config.temperatureAlert : 70;
     this.config.sysfsPath = isValidString(this.config.sysfsPath, 1) && this.config.sysfsPath.trim() ? this.config.sysfsPath : '/sys';
     this.log.info(info`Platform ${bgBlue.white`${this.config.name}`} initialized successfully`);
   }
@@ -90,13 +103,14 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
     this.log.info(info`Starting platform ${bgBlue.white`${this.config.name}`} with reason: ${reason ?? 'no reason provided'}...`);
     await this.ready;
     await this.clearSelect();
-    if (this.hostPlatform !== 'linux') {
-      const message = `Host Health supports Linux only. No devices will be created on ${this.hostPlatform}.`;
+    if (this.hostPlatform !== 'linux' && this.hostPlatform !== 'darwin') {
+      const message = `Host Health supports Linux and macOS only. No devices will be created on ${this.hostPlatform}.`;
       this.log.warn(message);
       this.wssSendSnackbarMessage(message, 0, 'warning');
       return;
     }
     this.stopped = false;
+    await this.loadHistory();
     this.pending = this.createDevices();
     try {
       await this.pending;
@@ -104,6 +118,9 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
       this.pending = undefined;
     }
     this.schedule();
+    clearInterval(this.historyTimer);
+    this.historyTimer = setInterval(() => void this.saveHistory(), 60 * 60 * 1000);
+    this.historyTimer.unref();
     this.log.info(info`Platform ${bgBlue.white`${this.config.name}`} started successfully`);
   }
 
@@ -132,6 +149,54 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
   }
 
   /**
+   * Update the logger level for the platform and all registered devices.
+   * @param {LogLevel} logLevel New logger level.
+   * @returns {Promise<void>} Resolves when the logger level has been updated.
+   */
+  // oxlint-disable-next-line typescript/require-await
+  override async onChangeLoggerLevel(logLevel: LogLevel): Promise<void> {
+    this.log.info(info`Changing logger level of platform ${bgBlue.white`${this.config.name}`} to ${logLevel}...`);
+    this.log.logLevel = logLevel;
+    for (const device of this.getDevices()) {
+      device.log.logLevel = logLevel;
+    }
+    this.log.info(info`Platform ${bgBlue.white`${this.config.name}`} logger level changed successfully to ${logLevel}`);
+  }
+
+  /**
+   * Serve the frontend REST API.
+   * - `GET devices` returns the registered devices with their serial, name and latest temperature.
+   * - `GET device?serial=<serial>` returns a single registered device.
+   * - `GET device-history?serial=<serial>` returns the temperature history of a registered device.
+   * @param {string} method HTTP method.
+   * @param {string} [path] API path below the plugin api namespace.
+   * @param {Record<string, unknown>} [query] Query string parameters.
+   * @returns {Promise<unknown>} JSON-serializable response, or undefined for 404.
+   */
+  // oxlint-disable-next-line typescript/require-await
+  override async onFetch(method: string, path?: string, query?: Record<string, unknown>): Promise<unknown> {
+    if (method !== 'GET') return undefined;
+    const info = (device: MatterbridgeEndpoint): { serial: string; name: string; celsius: number | null; timestamp: number | null } => {
+      // Registered devices always have a serial number and a name from the basic information cluster.
+      const serial = String(device.serialNumber);
+      const last = this.history.get(serial)?.get().at(-1);
+      const label = this.config.nodeLabels[String(device.deviceName)]?.name;
+      return { serial, name: isValidString(label, 1, 32) ? label : String(device.deviceName), celsius: last?.celsius ?? null, timestamp: last?.timestamp ?? null };
+    };
+    if (path === 'devices') return this.getDevices().map(info);
+    if (path === 'device') {
+      const device = typeof query?.serial === 'string' ? this.getDeviceBySerialNumber(query.serial) : undefined;
+      return device ? info(device) : undefined;
+    }
+    if (path === 'device-history') {
+      const serial = query?.serial;
+      if (typeof serial !== 'string' || !this.getDeviceBySerialNumber(serial)) return undefined;
+      return this.history.get(serial)?.get() ?? [];
+    }
+    return undefined;
+  }
+
+  /**
    * Stop polling and await any active read before shutdown.
    * @param {string} [reason] Shutdown reason.
    * @returns {Promise<void>} Resolves when cleanup finishes.
@@ -139,11 +204,16 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
   override async onShutdown(reason?: string): Promise<void> {
     this.stopped = true;
     clearTimeout(this.timer);
+    this.timer = undefined;
     await this.pending;
+    if (this.historyTimer) {
+      clearInterval(this.historyTimer);
+      this.historyTimer = undefined;
+      await this.saveHistory();
+    }
     await super.onShutdown(reason);
     this.log.info(info`Shutting down platform ${bgBlue.white`${this.config.name}`} with reason: ${reason ?? 'no reason provided'}...`);
     if (this.config.unregisterOnShutdown) await this.unregisterAllDevices();
-    this.sensors.clear();
     this.sources.length = 0;
     this.log.info(info`Platform ${bgBlue.white`${this.config.name}`} shut down successfully`);
   }
@@ -171,14 +241,18 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
    */
   private async createDevices(): Promise<void> {
     try {
-      const readings = await readLinuxTemperatures(this.config.sysfsPath);
+      const readings = this.hostPlatform === 'darwin' ? await readMacosTemperatures() : await readLinuxTemperatures(this.config.sysfsPath);
       if (this.stopped) return;
       if (!readings.length) {
-        this.log.warn('No CPU temperatures found. Check Linux sensor availability and sysfs permissions.');
+        this.log.warn(
+          this.hostPlatform === 'darwin'
+            ? 'No CPU temperatures found. Check macOS Apple Silicon IOKit sensor availability.'
+            : 'No CPU temperatures found. Check Linux sensor availability and sysfs permissions.',
+        );
       }
       for (const reading of readings) {
         const serial = sensorSerial(`${hostname()}/${reading.id}`);
-        if (this.sensors.has(serial)) continue;
+        if (this.getDeviceBySerialNumber(serial)) continue;
         const name = `${hostname()} ${reading.name}`;
         this.setSelectDevice(serial, name);
         if (!this.validateDevice([name, serial])) continue;
@@ -186,10 +260,15 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
           .createDefaultBridgedDeviceBasicInformationClusterServer(name.slice(0, 32), serial, this.matterbridge.aggregatorVendorId, 'Matterbridge', 'Host CPU Temperature')
           .createDefaultTemperatureMeasurementClusterServer(reading.celsius === null ? null : Math.round(reading.celsius * 100))
           .addRequiredClusters();
+        device.configUrl = `./plugins/matterbridge-host-health/?device=${encodeURIComponent(serial)}`;
+        device
+          .addChildDeviceType('TemperatureAlert', contactSensor)
+          .createDefaultBooleanStateClusterServer(reading.celsius === null || reading.celsius <= this.config.temperatureAlert)
+          .addRequiredClusters();
         await this.registerDevice(device);
         await this.configureNodeLabels(device);
-        this.sensors.set(serial, device);
         this.sources.push(reading);
+        this.addHistory(serial, reading.celsius);
       }
     } catch (error) {
       this.warnReadingError(error);
@@ -240,14 +319,73 @@ export class HostHealthPlatform extends MatterbridgeDynamicPlatform {
     try {
       const readings = await sampleCpuTemperatures(this.sources);
       if (this.stopped) return;
-      const values = new Map(readings.map((reading) => [sensorSerial(`${hostname()}/${reading.id}`), reading.celsius]));
-      for (const [serial, device] of this.sensors) {
-        const celsius = values.get(serial);
-        await device.setAttribute(TemperatureMeasurement, 'measuredValue', celsius === null || celsius === undefined ? null : Math.round(celsius * 100), this.log);
+      const values = new Map<string | undefined, number | null>(readings.map((reading) => [sensorSerial(`${hostname()}/${reading.id}`), reading.celsius]));
+      for (const source of this.sources) {
+        const serial = sensorSerial(`${hostname()}/${source.id}`);
+        this.addHistory(serial, values.get(serial) ?? null);
+      }
+      for (const device of this.getDevices()) {
+        const celsius = values.get(device.serialNumber);
+        const valid = celsius !== null && celsius !== undefined;
+        await device.setAttribute(TemperatureMeasurement, 'measuredValue', valid ? Math.round(celsius * 100) : null, this.log);
+        for (const child of device.getChildEndpoints()) {
+          await child.setAttribute(BooleanState, 'stateValue', !(valid && celsius > this.config.temperatureAlert), this.log);
+        }
       }
     } catch (error) {
       this.warnReadingError(error);
-      for (const device of this.sensors.values()) await device.setAttribute(TemperatureMeasurement, 'measuredValue', null, this.log);
+      for (const device of this.getDevices()) {
+        await device.setAttribute(TemperatureMeasurement, 'measuredValue', null, this.log);
+        for (const child of device.getChildEndpoints()) {
+          await child.setAttribute(BooleanState, 'stateValue', true, this.log);
+        }
+      }
+    }
+  }
+
+  /**
+   * Append a temperature sample to the device history, creating the history when missing.
+   * @param {string} serial Device serial number.
+   * @param {number | null} celsius Temperature in degrees Celsius or null when unavailable.
+   * @returns {void} No return value.
+   */
+  private addHistory(serial: string, celsius: number | null): void {
+    let history = this.history.get(serial);
+    if (!history) this.history.set(serial, (history = new HistoryCache()));
+    history.add({ timestamp: Date.now(), celsius });
+  }
+
+  /**
+   * Load the persisted device histories from the platform context.
+   * @returns {Promise<void>} Resolves when the histories are loaded.
+   */
+  private async loadHistory(): Promise<void> {
+    this.history.clear();
+    if (!this.context) return;
+    try {
+      const stored = await this.context.get<Record<string, unknown>>('history', {});
+      for (const [serial, entries] of Object.entries(stored)) {
+        const history = new HistoryCache();
+        history.load(entries);
+        this.history.set(serial, history);
+      }
+      this.log.debug(`Loaded history for ${this.history.size} devices`);
+    } catch (error) {
+      this.log.warn(`Unable to load history: ${String(error)}`);
+    }
+  }
+
+  /**
+   * Persist the device histories to the platform context.
+   * @returns {Promise<void>} Resolves when the histories are saved.
+   */
+  private async saveHistory(): Promise<void> {
+    if (!this.context) return;
+    try {
+      await this.context.set('history', Object.fromEntries([...this.history].map(([serial, history]) => [serial, history.get()])));
+      this.log.debug(`Saved history for ${this.history.size} devices`);
+    } catch (error) {
+      this.log.warn(`Unable to save history: ${String(error)}`);
     }
   }
 

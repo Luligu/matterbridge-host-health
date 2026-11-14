@@ -5,7 +5,8 @@
  */
 
 import type { PlatformMatterbridge } from 'matterbridge';
-import { BridgedDeviceBasicInformation, TemperatureMeasurement } from 'matterbridge/matter/clusters';
+import { LogLevel } from 'matterbridge/logger';
+import { BooleanState, BridgedDeviceBasicInformation, TemperatureMeasurement } from 'matterbridge/matter/clusters';
 import {
   addMatterbridge,
   createServerNode,
@@ -24,11 +25,15 @@ import { bgBlue, info } from 'node-ansi-logger';
 
 import initializePlugin, { HostHealthPlatform, type HostHealthPlatformConfig } from '../src/module.js';
 
-const state = vi.hoisted(() => ({ platform: 'linux', hostname: 'host', read: vi.fn(), sample: vi.fn() }));
+const state = vi.hoisted(() => ({ platform: 'linux', hostname: 'host', read: vi.fn(), readMacos: vi.fn(), sample: vi.fn() }));
 vi.mock('node:os', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:os')>()),
   platform: (): string => state.platform,
   hostname: (): string => state.hostname,
+}));
+vi.mock('../src/macos.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/macos.js')>()),
+  readMacosTemperatures: state.readMacos,
 }));
 vi.mock('../src/temperatures.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/temperatures.js')>()),
@@ -46,6 +51,7 @@ const config: HostHealthPlatformConfig = {
   blackList: [],
   nodeLabels: {},
   pollInterval: 5,
+  temperatureAlert: 70,
   sysfsPath: '/sys',
   debug: false,
   unregisterOnShutdown: true,
@@ -73,6 +79,7 @@ beforeEach(() => {
     { id: 'cpu0', name: 'Core 0', celsius: 42.25 },
     { id: 'cpu1', name: 'Core 1', celsius: 45 },
   ]);
+  state.readMacos.mockResolvedValue([{ id: 'darwin/PMU tdie1', name: 'PMU tdie1', celsius: 36.5 }]);
   instance = initializePlugin(matterbridge, log, { ...config, whiteList: [], blackList: [] });
   addMatterbridge(instance);
 });
@@ -111,6 +118,21 @@ describe('host health lifecycle', () => {
     await instance.onConfigChanged(withoutLabels);
     expect(instance.config.nodeLabels).toEqual({});
     expect(device.getAttribute(BridgedDeviceBasicInformation, 'nodeLabel')).toBe('Updated CPU');
+  });
+
+  it('should update platform and device logger levels when onChangeLoggerLevel is called', async () => {
+    await instance.onStart();
+    const devices = instance.getDevices();
+    expect(devices).toHaveLength(2);
+    const previousLevel = instance.log.logLevel;
+    await instance.onChangeLoggerLevel(LogLevel.DEBUG);
+    expect(instance.log.logLevel).toBe(LogLevel.DEBUG);
+    for (const device of devices) {
+      expect(device.log.logLevel).toBe(LogLevel.DEBUG);
+    }
+    expect(loggerInfoSpy).toHaveBeenCalledWith(info`Changing logger level of platform ${bgBlue.white`${config.name}`} to ${LogLevel.DEBUG}...`);
+    expect(loggerInfoSpy).toHaveBeenCalledWith(info`Platform ${bgBlue.white`${config.name}`} logger level changed successfully to ${LogLevel.DEBUG}`);
+    await instance.onChangeLoggerLevel(previousLevel);
   });
 
   it('should apply configured node labels to matching devices and log the changes', async () => {
@@ -198,17 +220,35 @@ describe('host health lifecycle', () => {
     expect(loggerWarnSpy).not.toHaveBeenCalled();
   });
 
-  it.each(['win32', 'darwin'])('should show a snackbar and create no devices on unsupported platform %s', async (hostPlatform) => {
+  it('should discover macOS sensors and warn when none are found', async () => {
+    await instance.onShutdown();
+    state.platform = 'darwin';
+    instance = initializePlugin(matterbridge, log, { ...config });
+    addMatterbridge(instance);
+    await instance.onStart();
+    expect(state.readMacos).toHaveBeenCalledOnce();
+    expect(state.read).not.toHaveBeenCalled();
+    expect(instance.getDevices()).toHaveLength(1);
+    await instance.onShutdown();
+    state.readMacos.mockResolvedValueOnce([]);
+    expectedWarnings = ['No CPU temperatures found. Check macOS Apple Silicon IOKit sensor availability.'];
+    instance = initializePlugin(matterbridge, log, { ...config });
+    addMatterbridge(instance);
+    await instance.onStart();
+    expect(instance.getDevices()).toHaveLength(0);
+  });
+
+  it.each(['win32', 'freebsd'])('should show a snackbar and create no devices on unsupported platform %s', async (hostPlatform) => {
     await instance.onShutdown();
     state.platform = hostPlatform;
-    expectedWarnings = [`Host Health supports Linux only. No devices will be created on ${hostPlatform}.`];
+    expectedWarnings = [`Host Health supports Linux and macOS only. No devices will be created on ${hostPlatform}.`];
     instance = initializePlugin(matterbridge, log, { ...config });
     addMatterbridge(instance);
     const snackbar = vi.spyOn(instance, 'wssSendSnackbarMessage');
     await instance.onStart('test');
     expect(state.read).not.toHaveBeenCalled();
     expect(instance.getDevices()).toHaveLength(0);
-    expect(snackbar).toHaveBeenCalledWith(expect.stringContaining('Linux only'), 0, 'warning');
+    expect(snackbar).toHaveBeenCalledWith(expect.stringContaining('Linux and macOS only'), 0, 'warning');
   });
 
   it('should honor the real device selection lists', async () => {
@@ -264,20 +304,29 @@ describe('host health lifecycle', () => {
 });
 
 describe('configuration and sampling edge cases', () => {
-  it.each([undefined, 4, 3601, 5.5, Number.NaN])('should default invalid or omitted polling interval %s to 30 seconds', async (pollInterval) => {
+  it.each([undefined, 4, 3601, 5.5, Number.NaN])('should default invalid or omitted polling interval %s to 60 seconds', async (pollInterval) => {
     await instance.onShutdown();
-    const pluginConfig = { ...config, pollInterval: pollInterval ?? 30, sysfsPath: '' };
-    if (pollInterval === undefined) Reflect.deleteProperty(pluginConfig, 'pollInterval');
+    const pluginConfig = {
+      ...config,
+      pollInterval: pollInterval ?? 60,
+      temperatureAlert: pollInterval === 4 ? -1 : pollInterval === 5.5 ? 151 : (pollInterval ?? 70),
+      sysfsPath: '',
+    };
+    if (pollInterval === undefined) {
+      Reflect.deleteProperty(pluginConfig, 'pollInterval');
+      Reflect.deleteProperty(pluginConfig, 'temperatureAlert');
+    }
     instance = initializePlugin(matterbridge, log, pluginConfig);
     expect(instance.config).toBe(pluginConfig);
-    expect(instance.config.pollInterval).toBe(30);
+    expect(instance.config.pollInterval).toBe(60);
+    expect(instance.config.temperatureAlert).toBe(70);
     expect(instance.config.sysfsPath).toBe('/sys');
     addMatterbridge(instance);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     await instance.onStart();
     expect(state.read).toHaveBeenCalledExactlyOnceWith('/sys');
     state.sample.mockClear();
-    await vi.advanceTimersByTimeAsync(29999);
+    await vi.advanceTimersByTimeAsync(59999);
     expect(state.sample).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(state.sample).toHaveBeenCalledOnce();
@@ -288,12 +337,31 @@ describe('configuration and sampling edge cases', () => {
     state.read.mockResolvedValue([{ id: 'cpu0', name: 'Core 0', celsius: null }]);
     await instance.onStart('test');
     expect(instance.getDevices()[0].getAttribute(TemperatureMeasurement, 'measuredValue')).toBeNull();
+    expect(instance.getDevices()[0].getChildEndpoints()[0].getAttribute(BooleanState, 'stateValue')).toBe(true);
     const devices = instance.getDevices();
     const unregister = vi.spyOn(instance, 'unregisterAllDevices');
     await instance.onShutdown();
     expect(unregister).not.toHaveBeenCalled();
     for (const device of devices) await device.delete();
     instance.config.unregisterOnShutdown = true;
+  });
+
+  it('should update child contact sensor state when temperature crosses temperatureAlert', async () => {
+    state.read.mockResolvedValue([
+      { id: 'cpu0', name: 'Core 0', celsius: 70 },
+      { id: 'cpu1', name: 'Core 1', celsius: 75 },
+    ]);
+    await instance.onStart();
+    const devices = instance.getDevices();
+    expect(devices[0].getChildEndpoints()[0].getAttribute(BooleanState, 'stateValue')).toBe(true);
+    expect(devices[1].getChildEndpoints()[0].getAttribute(BooleanState, 'stateValue')).toBe(false);
+    state.sample.mockResolvedValue([
+      { id: 'cpu0', name: 'Core 0', celsius: 71 },
+      { id: 'cpu1', name: 'Core 1', celsius: 65 },
+    ]);
+    await instance.onConfigure();
+    expect(devices[0].getChildEndpoints()[0].getAttribute(BooleanState, 'stateValue')).toBe(false);
+    expect(devices[1].getChildEndpoints()[0].getAttribute(BooleanState, 'stateValue')).toBe(true);
   });
 
   it('should mark existing readings unavailable on non-Error sampling failures', async () => {
@@ -401,4 +469,87 @@ it('should update known sensors with an unavailable value', async () => {
   state.sample.mockResolvedValue([{ id: 'cpu0', name: 'Core 0', celsius: null }]);
   await instance.onConfigure();
   expect(instance.getDevices().map((device) => device.getAttribute(TemperatureMeasurement, 'measuredValue'))).toEqual([null, null]);
+});
+
+describe('device history', () => {
+  it('should record samples per serial number, save them hourly and on shutdown, and reload them on start', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+    await instance.ready;
+    await instance.context?.set('history', {});
+    await instance.onStart();
+    const serials = instance.getDevices().map((device) => device.serialNumber ?? '');
+    expect(
+      serials.map((serial) =>
+        instance.history
+          .get(serial)
+          ?.get()
+          .map((entry) => entry.celsius),
+      ),
+    ).toEqual([[42.25], [45]]);
+    state.sample.mockResolvedValue([{ id: 'cpu0', name: 'Core 0', celsius: 50 }]);
+    const context = instance.context;
+    if (!context) throw new Error('Missing platform context');
+    const set = vi.spyOn(context, 'set');
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(set).toHaveBeenCalledWith('history', expect.objectContaining({ [serials[1]]: expect.arrayContaining([{ timestamp: expect.any(Number), celsius: null }]) }));
+    set.mockClear();
+    await instance.onShutdown();
+    expect(set).toHaveBeenCalledOnce();
+    const saved = instance.history.get(serials[0])?.get();
+    instance = initializePlugin(matterbridge, log, { ...config, whiteList: [], blackList: [] });
+    addMatterbridge(instance);
+    state.read.mockResolvedValue([]);
+    expectedWarnings = ['No CPU temperatures found. Check Linux sensor availability and sysfs permissions.'];
+    await instance.onStart();
+    expect(instance.history.get(serials[0])?.get()).toEqual(saved);
+  });
+
+  it('should warn when the history cannot be loaded or saved', async () => {
+    await instance.ready;
+    const context = instance.context;
+    if (!context) throw new Error('Missing platform context');
+    const get = vi.spyOn(context, 'get').mockRejectedValueOnce(new Error('load failed'));
+    const set = vi.spyOn(context, 'set').mockRejectedValueOnce('save failed');
+    expectedWarnings = ['Unable to load history: Error: load failed', 'Unable to save history: save failed'];
+    await instance.onStart();
+    await instance.onShutdown();
+    expect(get).toHaveBeenCalled();
+    expect(set).toHaveBeenCalled();
+  });
+
+  it('should serve the devices and device-history api', async () => {
+    await instance.onStart();
+    const serials = instance.getDevices().map((device) => String(device.serialNumber));
+    expect(await instance.onFetch('GET', 'devices')).toEqual([
+      { serial: serials[0], name: `${state.hostname} Core 0`, celsius: 42.25, timestamp: expect.any(Number) },
+      { serial: serials[1], name: `${state.hostname} Core 1`, celsius: 45, timestamp: expect.any(Number) },
+    ]);
+    expect(instance.getDevices()[0].configUrl).toBe(`./plugins/matterbridge-host-health/?device=${serials[0]}`);
+    expect(await instance.onFetch('GET', 'device', { serial: serials[0] })).toEqual({
+      serial: serials[0],
+      name: `${state.hostname} Core 0`,
+      celsius: 42.25,
+      timestamp: expect.any(Number),
+    });
+    expect(await instance.onFetch('GET', 'device', { serial: 'unknown' })).toBeUndefined();
+    expect(await instance.onFetch('GET', 'device')).toBeUndefined();
+    expect(await instance.onFetch('GET', 'device-history', { serial: serials[0] })).toEqual([{ timestamp: expect.any(Number), celsius: 42.25 }]);
+    instance.history.delete(serials[1]);
+    expect(await instance.onFetch('GET', 'devices')).toEqual(expect.arrayContaining([{ serial: serials[1], name: `${state.hostname} Core 1`, celsius: null, timestamp: null }]));
+    expect(await instance.onFetch('GET', 'device-history', { serial: serials[1] })).toEqual([]);
+    expect(await instance.onFetch('GET', 'device-history', { serial: 'unknown' })).toBeUndefined();
+    expect(await instance.onFetch('GET', 'device-history')).toBeUndefined();
+    expect(await instance.onFetch('GET', 'other')).toBeUndefined();
+    expect(await instance.onFetch('POST', 'devices')).toBeUndefined();
+    instance.config.nodeLabels = { [`${state.hostname} Core 0`]: { name: 'CPU Package' }, [`${state.hostname} Core 1`]: { name: '' } };
+    expect(await instance.onFetch('GET', 'device', { serial: serials[0] })).toEqual(expect.objectContaining({ name: 'CPU Package' }));
+    expect(await instance.onFetch('GET', 'device', { serial: serials[1] })).toEqual(expect.objectContaining({ name: `${state.hostname} Core 1` }));
+  });
+
+  it('should skip history persistence when the platform context is unavailable', async () => {
+    await instance.ready;
+    instance.context = undefined;
+    await instance.onStart();
+    expect(instance.history.size).toBe(2);
+  });
 });

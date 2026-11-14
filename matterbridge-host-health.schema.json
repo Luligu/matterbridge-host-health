@@ -61,11 +61,19 @@
       "type": "integer",
       "minimum": 5,
       "maximum": 3600,
-      "default": 30
+      "default": 60
+    },
+    "temperatureAlert": {
+      "title": "Temperature alert",
+      "description": "Temperature threshold in degrees Celsius above which the contact sensor opens.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 150,
+      "default": 70
     },
     "sysfsPath": {
       "title": "Linux sysfs path",
-      "description": "Root of the Linux host sysfs mount.",
+      "description": "Root of the Linux host sysfs filesystem (default /sys). In Docker on a Linux host, bind-mount the whole host /sys read-only (for example, -v /sys:/host-sys:ro) and set this to /host-sys so class/hwmon and class/thermal symlinks resolve into devices. Ignored on macOS.",
       "type": "string",
       "default": "/sys"
     },

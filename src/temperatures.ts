@@ -23,7 +23,10 @@
 
 import { createHash } from 'node:crypto';
 import { readFile, readdir, realpath } from 'node:fs/promises';
+import { platform } from 'node:os';
 import path from 'node:path';
+
+import { readMacosTemperatures } from './macos.js';
 
 const cpuDriver = /^(coretemp|k10temp|k8temp|zenpower|cpu_thermal|cpu-thermal|bcm2835_thermal|raspberrypi.*|peci_cputemp|cpu.*temp)$/i;
 const cpuLabel = /\b(cpu|core|package|tctl|tdie|tccd\d*)\b/i;
@@ -129,5 +132,10 @@ export function sensorSerial(identity: string): string {
  * @returns {Promise<CpuTemperature[]>} Updated readings for the known sources only.
  */
 export async function sampleCpuTemperatures(sensors: CpuTemperature[]): Promise<CpuTemperature[]> {
+  if (!sensors.length) return [];
+  if (platform() === 'darwin') {
+    const values = new Map((await readMacosTemperatures()).map((sensor) => [sensor.id, sensor.celsius]));
+    return sensors.map((sensor) => ({ ...sensor, celsius: values.get(sensor.id) ?? null }));
+  }
   return Promise.all(sensors.map(async (sensor) => ({ ...sensor, celsius: sensor.source ? parseTemperature(await readText(sensor.source), 1000) : null })));
 }
