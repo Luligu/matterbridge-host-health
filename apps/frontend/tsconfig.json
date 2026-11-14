@@ -1,0 +1,18 @@
+// apps/frontend/tsconfig.json v.1.0.0
+
+// This TypeScript configuration is designed for a Vite / React / TypeScript frontend.
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "types": ["vite/client", "vitest/globals"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vitest/**/*.ts", "vitest/**/*.tsx", "vite.config.ts", "vitest.config.ts"]
+}
